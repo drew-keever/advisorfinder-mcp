@@ -105,7 +105,7 @@ For personalized financial guidance, consult a qualified professional.
 - **AdvisorFinder**: [advisorfinder.com](https://advisorfinder.com)
 - **SEC IAPD**: [adviserinfo.sec.gov](https://adviserinfo.sec.gov)
 - **FINRA BrokerCheck**: [brokercheck.finra.org](https://brokercheck.finra.org)
-- **Source**: [github.com/drew-keever/sec-advisor-project](https://github.com/drew-keever/sec-advisor-project)
+- **Source**: [github.com/drew-keever/advisorfinder-mcp](https://github.com/drew-keever/advisorfinder-mcp)
 - **PyPI**: [pypi.org/project/advisorfinder-mcp](https://pypi.org/project/advisorfinder-mcp/)
 
 ## License
