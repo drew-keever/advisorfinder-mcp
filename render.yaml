@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: advisorfinder-mcp
+    runtime: docker
+    dockerfilePath: ./mcp_server/Dockerfile
+    dockerContext: ./mcp_server
+    plan: free
+    envVars:
+      - key: PORT
+        value: "8080"
