@@ -47,10 +47,10 @@ Restart Claude Desktop. Then just ask naturally — "look up my financial adviso
 
 Once configured, just talk to Claude naturally:
 
-- "Give me a full profile on Joseph Montgomery at Wells Fargo"
+- "Give me a full profile on Jane Doe at Wells Fargo"
 - "Look up financial advisor Thomas Kopelman"
 - "Search for advisors named Smith in New York"
-- "Is my advisor safe? Their name is Jane Doe, she's at Edward Jones in Texas"
+- "Is my advisor safe? Their name is John Doe, he's at Edward Jones in Texas"
 - "Tell me about Edward Jones as a firm — how many advisors do they have?"
 - "How many registered advisors are in the SEC database?"
 
