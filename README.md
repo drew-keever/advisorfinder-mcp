@@ -62,7 +62,7 @@ No CRD numbers needed. Just use the advisor's name, firm, or state.
 |------|-------------|
 | `search_advisors` | Search by name, state, or firm. Supports full names ("Joseph Montgomery") or just last names. |
 | `lookup_advisor` | Full advisor profile by CRD — employment history, office location, registered states, years of experience, designations, exams, outside business activities, disclosures, and risk score. |
-| `verify_advisor` | Quick safety check — active/inactive, disclosures, risk level, recommendation. |
+| `verify_advisor` | Quick risk profile check — active/inactive, disclosures, risk level, etc. |
 | `get_risk_profile` | Detailed risk assessment with individual risk factors and severity ratings. |
 | `get_firm_info` | Firm overview — total advisors, disclosure rates, location. |
 | `get_database_stats` | Database-wide statistics — 433,000+ advisors, top states, disclosure rates. |
