@@ -14,9 +14,9 @@ Tools provided:
 - get_database_stats: Overall database statistics
 
 Usage:
-    python server.py              # Local stdio (for Claude Desktop)
-    python server.py --http       # Remote HTTP server (for cloud deploy)
-    fastmcp run server.py
+    python advisorfinder_mcp.py           # Local stdio (for Claude Desktop)
+    python advisorfinder_mcp.py --http    # Remote HTTP server (for cloud deploy)
+    advisorfinder-mcp                     # Installed script (stdio)
 """
 
 import json
@@ -538,7 +538,7 @@ U.S. Securities and Exchange Commission (SEC). It contains registration and
 disclosure information for investment adviser firms and individuals.
 
 - **Website**: https://adviserinfo.sec.gov
-- **Updated**: Weekly (compilation reports published every Thursday)
+- **Source cadence**: The SEC publishes compilation reports weekly; our copy is refreshed periodically
 - **Coverage**: All SEC-registered investment advisers and their representatives
 - **Data includes**: Advisor registrations, employment history, exams passed,
   professional designations, and disclosure events (complaints, regulatory
@@ -577,8 +577,10 @@ Always cross-reference advisor data using these official sources:
 ## Database Statistics
 
 Use the `get_database_stats` tool to see current counts of advisors, firms,
-and disclosure rates in our database. Our local copy is refreshed from SEC
-compilation reports and may be up to one week behind the live IAPD data.
+and disclosure rates in our database. Our copy is refreshed from SEC
+compilation reports periodically — the get_database_stats tool returns the
+current data_as_of date. For guaranteed-current data, always confirm via the
+official SEC/FINRA links.
 """
 
 
