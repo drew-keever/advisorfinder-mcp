@@ -56,6 +56,27 @@ def _get_level(score: int) -> str:
         return 'High'
     return 'Very High'
 
+
+_DISCLOSURE_LABELS = {
+    'has_criminal': 'Criminal',
+    'has_regulatory_action': 'Regulatory Action',
+    'has_customer_complaint': 'Customer Complaint',
+    'has_termination': 'Termination',
+    'has_civil_judicial': 'Civil/Judicial Action',
+    'has_judgment': 'Judgment/Lien',
+    'has_investigation': 'Investigation',
+    'has_bankruptcy': 'Bankruptcy',
+    'has_bond': 'Bond Issue',
+}
+
+
+def _severity(points: int) -> str:
+    if points >= 30:
+        return "High"
+    if points >= 20:
+        return "Medium"
+    return "Low"
+
 # API Configuration
 API_BASE = "https://sec-advisor-project.vercel.app/api/index"
 
@@ -208,7 +229,7 @@ def search_advisors(
         params.append(f"state={urllib.parse.quote(state.upper())}")
     if firm:
         params.append(f"firm={urllib.parse.quote(firm)}")
-    params.append(f"limit={min(limit, 100)}")
+    params.append(f"limit={max(1, min(limit, 100))}")
 
     if not name and not state and not firm:
         return {"error": "At least one search parameter (name, state, or firm) is required"}
@@ -225,13 +246,7 @@ def search_advisors(
         "active": a.get("active_registration"),
         "firm": a.get("firm_name"),
         "location": f"{a.get('city', '')}, {a.get('state', '')}".strip(", "),
-        "has_disclosures": any([
-            a.get("has_customer_complaint"),
-            a.get("has_regulatory_action"),
-            a.get("has_criminal"),
-            a.get("has_termination"),
-            a.get("has_bankruptcy"),
-        ])
+        "has_disclosures": any(a.get(flag) for flag in _RISK_WEIGHTS),
     } for a in data.get("advisors", [])]
 
     response = {
@@ -278,17 +293,9 @@ def verify_advisor(crd_number: int) -> dict:
 
     advisor = data["advisor"]
 
-    disclosure_types = []
-    if advisor.get('has_customer_complaint'):
-        disclosure_types.append("Customer Complaint")
-    if advisor.get('has_regulatory_action'):
-        disclosure_types.append("Regulatory Action")
-    if advisor.get('has_criminal'):
-        disclosure_types.append("Criminal")
-    if advisor.get('has_termination'):
-        disclosure_types.append("Termination")
-    if advisor.get('has_bankruptcy'):
-        disclosure_types.append("Bankruptcy")
+    disclosure_types = [
+        label for flag, label in _DISCLOSURE_LABELS.items() if advisor.get(flag)
+    ]
 
     score, level = _risk_score(advisor)
 
@@ -330,25 +337,10 @@ def get_risk_profile(crd_number: int) -> dict:
     advisor = data["advisor"]
     score, level = _risk_score(advisor)
 
-    risk_factors = []
-    if advisor.get('has_criminal'):
-        risk_factors.append({"factor": "Criminal History", "severity": "High", "points": 50})
-    if advisor.get('has_regulatory_action'):
-        risk_factors.append({"factor": "Regulatory Action", "severity": "High", "points": 30})
-    if advisor.get('has_customer_complaint'):
-        risk_factors.append({"factor": "Customer Complaint", "severity": "Medium", "points": 25})
-    if advisor.get('has_termination'):
-        risk_factors.append({"factor": "Termination", "severity": "Medium", "points": 20})
-    if advisor.get('has_civil_judicial'):
-        risk_factors.append({"factor": "Civil/Judicial Action", "severity": "Low", "points": 15})
-    if advisor.get('has_judgment'):
-        risk_factors.append({"factor": "Judgment/Lien", "severity": "Low", "points": 15})
-    if advisor.get('has_investigation'):
-        risk_factors.append({"factor": "Investigation", "severity": "Low", "points": 10})
-    if advisor.get('has_bankruptcy'):
-        risk_factors.append({"factor": "Bankruptcy", "severity": "Low", "points": 10})
-    if advisor.get('has_bond'):
-        risk_factors.append({"factor": "Bond Issue", "severity": "Low", "points": 5})
+    risk_factors = [
+        {"factor": _DISCLOSURE_LABELS[flag], "severity": _severity(points), "points": points}
+        for flag, points in _RISK_WEIGHTS.items() if advisor.get(flag)
+    ]
 
     return {
         "found": True,
