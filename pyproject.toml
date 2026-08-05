@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Office/Business :: Financial",
 ]
 dependencies = [
-    "fastmcp>=2.0,<3.0",
+    "fastmcp>=3.4,<4.0",
 ]
 
 [project.urls]
@@ -30,7 +30,7 @@ Repository = "https://github.com/drew-keever/advisorfinder-mcp"
 Issues = "https://github.com/drew-keever/advisorfinder-mcp/issues"
 
 [project.scripts]
-advisorfinder-mcp = "advisorfinder_mcp:mcp.run"
+advisorfinder-mcp = "advisorfinder_mcp:main"
 
 [tool.hatch.build.targets.sdist]
 include = ["advisorfinder_mcp.py", "README.md", "LICENSE"]

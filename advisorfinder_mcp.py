@@ -29,33 +29,32 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-# Try importing from parent project; fall back to bundled version for standalone use
-try:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from risk_scoring import (
-        calculate_risk_score as _calc_score,
-        get_risk_level as _get_level
-    )
-except ImportError:
-    # Bundled risk scoring for standalone PyPI package
-    _RISK_WEIGHTS = {
-        'has_criminal': 50, 'has_regulatory_action': 30,
-        'has_customer_complaint': 25, 'has_termination': 20,
-        'has_civil_judicial': 15, 'has_judgment': 15,
-        'has_investigation': 10, 'has_bankruptcy': 10, 'has_bond': 5,
-    }
+# Risk weights intentionally duplicated from the parent project's risk_scoring.py —
+# this file must stay standalone for the PyPI package. Keep values in sync.
+_RISK_WEIGHTS = {
+    'has_criminal': 50, 'has_regulatory_action': 30,
+    'has_customer_complaint': 25, 'has_termination': 20,
+    'has_civil_judicial': 15, 'has_judgment': 15,
+    'has_investigation': 10, 'has_bankruptcy': 10, 'has_bond': 5,
+}
 
-    def _calc_score(disclosures: dict) -> int:
-        if not disclosures:
-            return 0
-        return sum(w for f, w in _RISK_WEIGHTS.items() if disclosures.get(f))
 
-    def _get_level(score: int) -> str:
-        if score == 0: return 'Clean'
-        if score <= 10: return 'Low'
-        if score <= 30: return 'Medium'
-        if score <= 60: return 'High'
-        return 'Very High'
+def _calc_score(disclosures: dict) -> int:
+    if not disclosures:
+        return 0
+    return sum(w for f, w in _RISK_WEIGHTS.items() if disclosures.get(f))
+
+
+def _get_level(score: int) -> str:
+    if score == 0:
+        return 'Clean'
+    if score <= 10:
+        return 'Low'
+    if score <= 30:
+        return 'Medium'
+    if score <= 60:
+        return 'High'
+    return 'Very High'
 
 # API Configuration
 API_BASE = "https://sec-advisor-project.vercel.app/api/index"
@@ -591,9 +590,13 @@ compilation reports and may be up to one week behind the live IAPD data.
 """
 
 
-if __name__ == "__main__":
-    import sys
+def main() -> None:
+    """Entry point: stdio by default, HTTP with --http (for cloud deploys)."""
     if "--http" in sys.argv:
         mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
     else:
         mcp.run()
+
+
+if __name__ == "__main__":
+    main()
