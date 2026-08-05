@@ -24,6 +24,7 @@ import os
 import sys
 import urllib.request
 import urllib.parse
+from datetime import date
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -82,11 +83,11 @@ def _risk_score(disclosures: dict) -> tuple[int, str]:
 def _get_recommendation(risk_level: str) -> str:
     """Get recommendation based on risk level."""
     recommendations = {
-        "Clean": "No disclosed issues. Standard due diligence recommended.",
-        "Low": "Minor disclosures present. Review details before proceeding.",
-        "Medium": "Notable disclosures. Recommend detailed review of disclosure reports.",
-        "High": "Significant disclosures. Strongly recommend thorough investigation.",
-        "Very High": "Multiple serious disclosures. Exercise extreme caution."
+        "Clean": "No disclosed issues on record.",
+        "Low": "Minor disclosures present. Full details available via the official sources.",
+        "Medium": "Notable disclosures on record. Full disclosure reports are available via SEC and FINRA links.",
+        "High": "Significant disclosures on record. Full details available via the official sources below.",
+        "Very High": "Multiple serious disclosures on record. See official sources for complete details."
     }
     return recommendations.get(risk_level, "Unable to assess.")
 
@@ -140,7 +141,6 @@ def lookup_advisor(crd_number: int) -> dict:
             except (ValueError, IndexError):
                 pass
 
-    from datetime import date
     years_experience = (date.today().year - earliest_year) if earliest_year else None
 
     # Get office location from employment_history (more accurate than firm HQ)
@@ -171,13 +171,7 @@ def lookup_advisor(crd_number: int) -> dict:
         "employment_history": emp_history,
         "previous_registrations": data.get("previous_registrations", []),
         "other_business": data.get("other_business", []),
-        "disclosures": {
-            "has_customer_complaint": advisor.get("has_customer_complaint"),
-            "has_regulatory_action": advisor.get("has_regulatory_action"),
-            "has_criminal": advisor.get("has_criminal"),
-            "has_termination": advisor.get("has_termination"),
-            "has_bankruptcy": advisor.get("has_bankruptcy"),
-        },
+        "disclosures": {k: advisor.get(k) for k in _RISK_WEIGHTS},
         "risk_score": score,
         "risk_level": level,
         "recommendation": _get_recommendation(level),
@@ -235,7 +229,9 @@ def search_advisors(
         "has_disclosures": any([
             a.get("has_customer_complaint"),
             a.get("has_regulatory_action"),
-            a.get("has_criminal")
+            a.get("has_criminal"),
+            a.get("has_termination"),
+            a.get("has_bankruptcy"),
         ])
     } for a in data.get("advisors", [])]
 
@@ -344,10 +340,16 @@ def get_risk_profile(crd_number: int) -> dict:
         risk_factors.append({"factor": "Customer Complaint", "severity": "Medium", "points": 25})
     if advisor.get('has_termination'):
         risk_factors.append({"factor": "Termination", "severity": "Medium", "points": 20})
+    if advisor.get('has_civil_judicial'):
+        risk_factors.append({"factor": "Civil/Judicial Action", "severity": "Low", "points": 15})
     if advisor.get('has_judgment'):
         risk_factors.append({"factor": "Judgment/Lien", "severity": "Low", "points": 15})
+    if advisor.get('has_investigation'):
+        risk_factors.append({"factor": "Investigation", "severity": "Low", "points": 10})
     if advisor.get('has_bankruptcy'):
         risk_factors.append({"factor": "Bankruptcy", "severity": "Low", "points": 10})
+    if advisor.get('has_bond'):
+        risk_factors.append({"factor": "Bond Issue", "severity": "Low", "points": 5})
 
     return {
         "found": True,
@@ -375,7 +377,7 @@ def get_firm_info(firm_crd: int) -> dict:
 
     total = firm.get("advisor_count", 0)
     with_complaints = stats.get("with_complaints", 0)
-    disclosure_rate = (with_complaints / total * 100) if total > 0 else 0
+    complaint_rate = (with_complaints / total * 100) if total > 0 else 0
 
     return {
         "found": True,
@@ -384,7 +386,7 @@ def get_firm_info(firm_crd: int) -> dict:
         "location": f"{firm.get('city', '')}, {firm.get('state', '')}".strip(", "),
         "total_advisors": total,
         "disclosure_stats": stats,
-        "disclosure_rate": f"{disclosure_rate:.2f}%",
+        "complaint_rate": f"{complaint_rate:.2f}%",
         "sec_link": f"https://adviserinfo.sec.gov/Firm/{firm_crd}"
     }
 

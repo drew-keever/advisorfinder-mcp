@@ -85,7 +85,7 @@ Reference data that AI assistants can read for context:
 
 **What's not included:** Advisors registered only as broker-dealer representatives (not investment advisers) may not appear. For broker-only registrations, the tools provide direct links to FINRA BrokerCheck. Fee schedules, assets under management, client reviews, and investment performance are not available — those require Form ADV filings or other sources.
 
-Data is sourced from the **SEC Investment Adviser Public Disclosure (IAPD)** database, updated monthly.
+Data is sourced from the **SEC Investment Adviser Public Disclosure (IAPD)** database and refreshed periodically — use the get_database_stats tool to see the current data_as_of date.
 
 ## Disclaimer
 
