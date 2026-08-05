@@ -107,3 +107,8 @@ def test_stats_passes_through_data_as_of(monkeypatch):
                             "total_firms": 1, "data_as_of": "2026-02-27"})
     result = srv.get_database_stats()
     assert result["data_as_of"] == "2026-02-27"
+
+
+def test_disclosure_labels_cover_all_risk_weights():
+    """A flag added to _RISK_WEIGHTS without a label would KeyError in get_risk_profile."""
+    assert set(srv._DISCLOSURE_LABELS) == set(srv._RISK_WEIGHTS)
