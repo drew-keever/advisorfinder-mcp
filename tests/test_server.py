@@ -100,3 +100,10 @@ def test_lookup_not_found_returns_official_links(monkeypatch):
     result = srv.lookup_advisor(999999)
     assert result["found"] is False
     assert "sec_iapd" in result["try_these"]
+
+
+def test_stats_passes_through_data_as_of(monkeypatch):
+    patch_api(monkeypatch, {"total_advisors": 1, "active_advisors": 1,
+                            "total_firms": 1, "data_as_of": "2026-02-27"})
+    result = srv.get_database_stats()
+    assert result["data_as_of"] == "2026-02-27"

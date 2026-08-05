@@ -401,6 +401,7 @@ def get_database_stats() -> dict:
             "with_regulatory": data.get("with_regulatory")
         },
         "top_states": data.get("top_states", []),
+        "data_as_of": data.get("data_as_of"),
         "data_source": "SEC Investment Adviser Public Disclosure (IAPD)",
         "api_url": API_BASE
     }
