@@ -264,6 +264,56 @@ def test_fts_query_apostrophe_and_hyphen_preserved():
     assert result == '"o\'hearn" "mary-jane"*'
 
 
+def test_fts_query_cjk_name_survives():
+    # A [A-Za-z0-9]-only whitelist strips every character of a CJK name,
+    # sanitizing it to None -- which callers treat as "no name filter" and
+    # silently fall through to an unfiltered browse. Unicode word characters
+    # (any script) must survive instead.
+    result = fmt.fts_query("李明")
+    assert result is not None
+    assert result == '"李明"*'
+
+
+def test_fts_query_cjk_name_matches_fts5_unicode61_index():
+    # Empirically verified (not assumed): sqlite's unicode61 tokenizer with
+    # remove_diacritics=2 (the export's actual tokenizer config) treats a CJK
+    # name as a single letter token that a prefix-star MATCH finds.
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE VIRTUAL TABLE t USING fts5(name, tokenize='unicode61 remove_diacritics 2')")
+    conn.execute("INSERT INTO t VALUES ('李明')")
+    q = fmt.fts_query("李明")
+    assert conn.execute("SELECT name FROM t WHERE t MATCH ?", (q,)).fetchall() == [("李明",)]
+
+
+def test_fts_query_accented_name_folds_to_ascii_tokens():
+    # "José García" must tokenize to ASCII-foldable tokens, not phrase
+    # fragments like "Jos"/"Garc"/"a" that can never MATCH the index (the
+    # export's advisor_fts is built with remove_diacritics=2, which folds
+    # accented Latin letters for matching purposes).
+    result = fmt.fts_query("José García")
+    assert result == '"Jose" "Garcia"*'
+
+
+def test_fts_query_accented_name_matches_fts5_unicode61_index():
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE VIRTUAL TABLE t USING fts5(name, tokenize='unicode61 remove_diacritics 2')")
+    conn.execute("INSERT INTO t VALUES ('José García')")
+    q = fmt.fts_query("José García")  # a caller typing the accented form...
+    assert conn.execute("SELECT name FROM t WHERE t MATCH ?", (q,)).fetchall() == [("José García",)]
+    q_ascii = fmt.fts_query("Jose Garcia")  # ...or the plain-ASCII form...
+    assert conn.execute("SELECT name FROM t WHERE t MATCH ?", (q_ascii,)).fetchall() == [("José García",)]
+    # ...both must match the same indexed (accented) row.
+
+
+def test_fts_query_underscore_not_treated_as_name_character():
+    # \w in Python's re module matches underscore too, but it isn't a real
+    # name character -- must not survive as a "safe" token.
+    result = fmt.fts_query("foo_bar")
+    assert "_" not in (result or "")
+
+
 # ── envelope ──────────────────────────────────────────────────────────────────
 
 def test_envelope_keys_present():

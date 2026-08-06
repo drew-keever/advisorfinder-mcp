@@ -67,20 +67,22 @@ def assert_schema_version() -> None:
 
 def disclosure_tally() -> dict:
     """Four-state disclosure tally over ALL ia_reps, computed directly here —
-    deliberately NOT read from export_meta's disclosure_tally_* fields.
+    deliberately NOT read from export_meta's disclosure_tally_* fields, even
+    though the export script (firm-intelligence repo, build_mcp_public_db.py)
+    now implements the exact same four-state contract as
+    format.disclosure_status() and its precomputed tally matches this
+    recompute value-for-value: has_disclosure='Y' with no iar_details row (or
+    a row with count 0/NULL) is disclosed_no_detail, never softened to
+    "unknown" for lack of detail.
 
-    Those fields are written by the (separately owned, already-reviewed)
-    export script in the firm-intelligence repo, to an OLDER four-state
-    contract that keyed the with-detail/no-detail split on "does an
-    iar_details row exist" rather than on has_disclosure alone. That
-    contract was corrected (coordinator spec correction, post-review): a
-    has_disclosure='Y' rep with no iar_details row is disclosed_no_detail,
-    not "uncounted" — softening a known disclosure to unknown for lack of
-    detail understates it. Recomputing here, with a CASE expression that
-    mirrors format.disclosure_status()'s exact bucketing, keeps this
-    aggregate and the per-advisor view from ever disagreeing again — trusting
-    export_meta's precomputed fields would silently reintroduce that
-    disagreement the next time the export script runs unchanged.
+    Recomputing here anyway is deliberate DECOUPLING / defense-in-depth, not
+    a correction of a wrong export: this server owns format.disclosure_status()
+    (the per-advisor bucketing) and shouldn't have to trust that a future
+    change to the separately-owned export script keeps matching it exactly.
+    The CASE expression below mirrors format.disclosure_status()'s bucketing
+    over the same ia_reps/iar_details rows the per-advisor view reads, so the
+    aggregate here and the per-advisor view can never silently disagree,
+    regardless of what export_meta's precomputed fields say.
     """
     with get_conn() as conn:
         row = conn.execute(
@@ -136,8 +138,19 @@ def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> li
 
     "Empty after sanitize = treat as absent" (per task-2-brief.md, stated for
     `name`) is applied uniformly to `firm` too, since both go through the same
-    fts_query() sanitizer: a firm filter that sanitizes to nothing just drops
-    that constraint rather than forcing zero results.
+    fts_query() sanitizer: a filter that sanitizes to nothing just drops that
+    constraint rather than forcing zero results. This is the right behavior
+    for a filter that was never supplied (None) in the first place.
+    server.py's `search_advisors`/`check_advisor` tools now additionally
+    reject a caller-SUPPLIED name/firm that sanitizes to empty before ever
+    calling down here, rather than let it silently degrade into an
+    unfiltered browse — but that guard lives at the tool layer, not
+    universally: `search_firms` (below) has no such guard yet and still
+    relies on this exact treat-as-absent path for a supplied-but-unsanitizable
+    `name`. This function's "absent filter" contract is deliberately kept
+    simple/reusable here; callers that need to distinguish "no filter" from
+    "unsanitizable filter" must do so themselves, as search_advisors/
+    check_advisor do.
     """
     with get_conn() as conn:
         where = ["1=1"]

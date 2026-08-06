@@ -6,6 +6,7 @@ disclosure/fee caveats, only ever touch this file.
 """
 import json
 import re
+import unicodedata
 import urllib.parse
 from datetime import date, datetime
 from typing import Any
@@ -191,21 +192,45 @@ def fee_block(part2a_row: Any) -> dict | None:
 # ── FTS query sanitizer ───────────────────────────────────────────────────────
 # Lives here (not db.py) because it's pure text processing with no DB
 # dependency; db.py's search queries import and call it.
+#
+# Unicode-aware by design: the export's advisor_fts/firm_fts tables are built
+# with tokenize='unicode61 remove_diacritics 2' (build_mcp_public_db.py), which
+# (a) folds Latin diacritics to their plain-ASCII equivalent for matching
+# purposes and (b) tokenizes non-Latin scripts (e.g. CJK) as ordinary letter
+# tokens, not garbage to be stripped. A sanitizer that only kept
+# [A-Za-z0-9\s'-] mangled both: "José García" survived as fragments
+# ("Jos"/"Garc"/"a") that could never MATCH the indexed row, and "李明" had
+# every character stripped, sanitizing to None — which callers (correctly, for
+# the *absent-filter* case) treat as "no name filter", silently turning a
+# supplied-but-mangled name into an unfiltered browse. See server.py's
+# per-tool guards for the caller-side half of that fix: a name/firm the caller
+# actually supplied must never silently sanitize away.
+_DISALLOWED_RE = re.compile(r"[^\w\s'\-]", re.UNICODE)
 
-_DISALLOWED_RE = re.compile(r"[^A-Za-z0-9\s'\-]")
+
+def _fold_diacritics(s: str) -> str:
+    """NFKD-normalize and drop combining marks, e.g. 'José' -> 'Jose'. A
+    no-op for scripts with no combining marks to strip (e.g. CJK), so it's
+    safe to apply unconditionally before the disallowed-character sweep."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch))
 
 
 def fts_query(raw: str | None) -> str | None:
     """Sanitize free-text user input into a safe SQLite FTS5 MATCH query:
-    strip everything except letters/digits/whitespace/apostrophe/hyphen, split
-    into tokens, drop any token with no alphanumeric character, quote each
-    surviving token as a phrase, star the last token (prefix match), join with
-    spaces (FTS5's implicit AND). Returns None if nothing survives — callers
-    treat that as "no name filter", not an error.
+    fold diacritics to ASCII (to match the index's remove_diacritics=2
+    tokenizer), strip everything except unicode word characters (letters in
+    any script, digits — but not underscore)/whitespace/apostrophe/hyphen,
+    split into tokens, drop any token with no alphanumeric character, quote
+    each surviving token as a phrase, star the last token (prefix match), join
+    with spaces (FTS5's implicit AND). Returns None if nothing survives —
+    callers treat that as "no name filter", not an error (see server.py for
+    why a *supplied* filter sanitizing to None must be rejected instead of
+    silently reaching this "absent" path).
     """
     if not raw:
         return None
-    cleaned = _DISALLOWED_RE.sub(" ", raw)
+    folded = _fold_diacritics(raw)
+    cleaned = _DISALLOWED_RE.sub(" ", folded).replace("_", " ")
     tokens = [t for t in cleaned.split() if any(c.isalnum() for c in t)]
     if not tokens:
         return None

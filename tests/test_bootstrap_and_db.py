@@ -110,7 +110,7 @@ def test_get_meta_returns_export_meta_dict():
     meta = db.get_meta()
     assert meta["ia_reps_as_of"] == "2026-05-20"
     assert meta["firms_as_of"] == "2026-05-01"
-    assert meta["advisors_count"] == "8"
+    assert meta["advisors_count"] == "9"
 
 
 def test_get_meta_is_cached():
@@ -128,18 +128,20 @@ def test_set_db_path_clears_meta_cache():
     assert after == before  # but the content is identical
 
 
-# ── disclosure_tally: recomputed directly, decoupled from export_meta's
-#    stale disclosure_tally_* fields (which encode the OLD, now-superseded
-#    four-state contract from the export script — see task-2-report.md's
-#    post-review-fix section) ──────────────────────────────────────────────
+# ── disclosure_tally: recomputed directly here as deliberate decoupling from
+#    export_meta's disclosure_tally_* fields — not because those fields are
+#    wrong (the export script now implements this exact same contract and its
+#    tally matches value-for-value), but so this server's aggregate can never
+#    silently drift from format.disclosure_status()'s per-advisor bucketing
+#    even if a future export-script change stops matching it ─────────────────
 
 def test_disclosure_tally_matches_corrected_four_state_contract():
     tally = db.disclosure_tally()
-    # Fixture (8 advisors): 1000001/1000005/1000006/1000008 -> none_reported;
-    # 1000002 -> disclosed_with_detail; 1000003/1000004 -> disclosed_no_detail;
-    # 1000007 -> unknown.
-    assert tally["none_reported"] == 4
+    # Fixture (9 advisors): 1000001/1000005/1000006/1000008/1000009 ->
+    # none_reported; 1000002 -> disclosed_with_detail; 1000003/1000004 ->
+    # disclosed_no_detail; 1000007 -> unknown.
+    assert tally["none_reported"] == 5
     assert tally["disclosed_no_detail"] == 2
     assert tally["disclosed_with_detail"] == 1
     assert tally["unknown"] == 1
-    assert sum(tally.values()) == 8
+    assert sum(tally.values()) == 9

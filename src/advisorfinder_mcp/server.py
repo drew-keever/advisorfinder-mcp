@@ -64,6 +64,30 @@ def _firm_verify_links(crd: str) -> dict:
     }
 
 
+def _unsanitizable_filter_error(label: str, value: str) -> dict:
+    """A caller-supplied name/firm filter that sanitizes to nothing (e.g.
+    punctuation-only, or — before the fts_query() unicode fix — a script
+    fts_query's [A-Za-z0-9] whitelist couldn't tokenize at all) must never be
+    silently dropped and treated as "no filter": that would fall through to
+    an unfiltered browse and present arbitrary rows as if they matched the
+    caller's search. Surface a clear error instead."""
+    return format.envelope({
+        "error": f"The provided {label} could not be used for search — it has no searchable characters.",
+        "hint": "Try a plain-text name/firm using letters, spaces, apostrophes, or hyphens.",
+    }, verify=format.name_search_urls(value))
+
+
+def _unsanitizable_supplied_filter(**filters: str | None) -> tuple[str, str] | None:
+    """Returns (label, value) for the first supplied (truthy) filter whose
+    fts_query() sanitizes to None/empty, or None if every supplied filter
+    survives sanitizing intact. Only checks filters that go through
+    fts_query() (name/firm) — city/state are plain equality matches, not FTS."""
+    for label, value in filters.items():
+        if value and format.fts_query(value) is None:
+            return label, value
+    return None
+
+
 _SERVES_LABELS = {
     "serves_individuals": "individuals",
     "serves_hnw": "high-net-worth individuals",
@@ -126,6 +150,10 @@ def search_advisors(
                 "name='Jane Smith', or city='Boston' with state='MA' to browse."
             ),
         })
+
+    unsanitizable = _unsanitizable_supplied_filter(name=name, firm=firm)
+    if unsanitizable:
+        return _unsanitizable_filter_error(*unsanitizable)
 
     clamped_limit = max(1, min(limit, 50))
     rows = db.search_advisors(name=name, firm=firm, city=city, state=state, limit=clamped_limit)
@@ -295,6 +323,10 @@ def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None =
                 verify=_individual_verify_links(crd),
             )
         return _check_verdict(crd, bundle)
+
+    unsanitizable = _unsanitizable_supplied_filter(name=name_or_crd, firm=firm)
+    if unsanitizable:
+        return _unsanitizable_filter_error(*unsanitizable)
 
     rows = db.search_advisors(name=name_or_crd, firm=firm, city=None, state=state, limit=6)
 
@@ -502,13 +534,16 @@ def get_database_stats() -> dict:
     advisors_count = int(meta.get("advisors_count", 0))
 
     # Recomputed directly via db.disclosure_tally() — deliberately NOT read
-    # from export_meta's disclosure_tally_* fields. Those are written by the
-    # export script to an older four-state contract (with-detail/no-detail
-    # keyed on iar_details row existence) that the coordinator's spec
-    # correction superseded; trusting the precomputed fields here would
-    # silently disagree with format.disclosure_status()'s per-advisor
-    # rendering (e.g. a 'Y' rep with no detail row is disclosed_no_detail,
-    # not "uncounted").
+    # from export_meta's disclosure_tally_* fields, even though the export
+    # script (firm-intelligence repo, build_mcp_public_db.py) now implements
+    # the exact same four-state contract as format.disclosure_status() and
+    # its precomputed tally matches this recompute exactly. This is
+    # decoupling/defense-in-depth, not a correction of a wrong export: the
+    # server never has to trust that some future export-script change keeps
+    # matching format.disclosure_status()'s bucketing — it derives the tally
+    # from the same ia_reps/iar_details rows the per-advisor view reads, so
+    # the aggregate and the per-advisor rendering can never silently diverge
+    # again, regardless of what export_meta says.
     tally = db.disclosure_tally()
 
     state_firms_count = int(meta.get("state_firms_count", 0))

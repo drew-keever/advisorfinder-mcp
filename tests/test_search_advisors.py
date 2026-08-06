@@ -119,3 +119,52 @@ def test_search_by_firm_name():
     ids = {r["crd"] for r in result["results"]}
     assert "1000001" in ids
     assert "1000003" not in ids  # MARY JONES is at BETA, not ALPHA
+
+
+def test_search_cjk_name_finds_advisor_not_unfiltered_browse():
+    # Regression for the fts_query() unicode bug: a [A-Za-z0-9]-only sanitizer
+    # mangled "李明" to None, which the (old) code path treated as "no name
+    # filter" and returned an unfiltered browse -- i.e. arbitrary advisors
+    # presented as if they matched. There's no CJK-named advisor in the
+    # fixture, so the real regression check is: a genuinely non-matching CJK
+    # name must return ZERO results, not a browse's worth of unrelated rows.
+    result = server.search_advisors(name="李明")
+    _envelope_keys_present(result)
+    assert "error" not in result
+    assert result["result_count"] == 0
+
+
+def test_search_accented_name_matches_fixture_advisor():
+    # 1000009 JOSÉ GARCÍA is indexed with accents; a consumer typing the
+    # plain-ASCII form must still find them (fts_query() folds diacritics to
+    # match the export's remove_diacritics=2 FTS index).
+    result = server.search_advisors(name="jose garcia")
+    _envelope_keys_present(result)
+    assert result["result_count"] == 1
+    assert result["results"][0]["crd"] == "1000009"
+    assert result["results"][0]["name"] == "José García"
+
+
+def test_search_accented_query_also_matches():
+    # The caller's own input may already carry the accents -- must match too.
+    result = server.search_advisors(name="José García")
+    assert result["result_count"] == 1
+    assert result["results"][0]["crd"] == "1000009"
+
+
+def test_search_supplied_name_unsanitizable_returns_error_not_browse():
+    # A SUPPLIED name that sanitizes to nothing (punctuation-only) must never
+    # silently fall through to an unfiltered browse presenting arbitrary rows
+    # as if they matched -- it must surface a clear error instead.
+    result = server.search_advisors(name="!!!")
+    _envelope_keys_present(result)
+    assert "error" in result
+    assert result.get("result_count") is None
+    assert "results" not in result
+
+
+def test_search_supplied_firm_unsanitizable_returns_error_not_browse():
+    result = server.search_advisors(name="jane smith", firm="***")
+    _envelope_keys_present(result)
+    assert "error" in result
+    assert "results" not in result

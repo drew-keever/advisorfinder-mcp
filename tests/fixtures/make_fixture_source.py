@@ -29,7 +29,14 @@ Design notes (why the population looks the way it does):
     1000006 ALEX NG           has_disclosure='N', row exists            -> none_reported
     1000007 CASEY UNKNOWNFLAG has_disclosure=NULL, NO iar_details row   -> unknown
     1000008 MORGAN NOROW      has_disclosure='N', NO iar_details row    -> none_reported
+    1000009 JOSÉ GARCÍA       has_disclosure='N', row exists            -> none_reported
   JANE SMITH and JOHN SMITH share last name SMITH -> ambiguous check_advisor("smith").
+  1000009 JOSÉ GARCÍA carries accented Latin characters specifically to exercise
+  fts_query()'s diacritic-folding: the advisor_fts index is built with
+  tokenize='unicode61 remove_diacritics 2' (build_mcp_public_db.py), which folds
+  "José García" to plain-ASCII "jose"/"garcia" tokens for matching purposes —
+  search_advisors(name="jose garcia") (no accents, as a consumer would type it)
+  must still find this row.
   1000004/1000007/1000008 all lack an iar_details row, pinning all three ways
   that absence interacts with has_disclosure: 'Y' -> disclosed_no_detail (NOT
   unknown — a known disclosure must never soften just because we lack detail);
@@ -341,6 +348,13 @@ def build_source_db(db_path: Path) -> Path:
     _insert(conn, "ia_reps", ind_source_id="1000008", first_name="MORGAN",
             last_name="NOROW", ia_scope="Active", has_disclosure="N",
             branch_states='["NY"]', fetched_date="2026-05-20")
+    # 1000009: accented-name advisor (José García) -> exercises fts_query()'s
+    # diacritic-folding against the export's remove_diacritics=2 FTS index.
+    # has_disclosure='N', row exists -> none_reported (an ordinary state, so
+    # this advisor tests ONLY the name-search/unicode path, nothing else).
+    _insert(conn, "ia_reps", ind_source_id="1000009", first_name="JOSÉ",
+            last_name="GARCÍA", ia_scope="Active", has_disclosure="N",
+            branch_states='["NY"]', fetched_date="2026-05-20")
 
     # ── ia_rep_firms: firm 100001 roster + firm 100002 roster; 1000005 at both;
     #    firm 100003 has NO rows at all -> empty-roster caveat vs its declared
@@ -364,6 +378,9 @@ def build_source_db(db_path: Path) -> Path:
             firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
             ia_only="Y")
     _insert(conn, "ia_rep_firms", ind_source_id="1000008", crd_number="100001",
+            firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
+            ia_only="Y")
+    _insert(conn, "ia_rep_firms", ind_source_id="1000009", crd_number="100001",
             firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
             ia_only="Y")
     _insert(conn, "ia_rep_firms", ind_source_id="1000003", crd_number="100002",
@@ -421,6 +438,14 @@ def build_source_db(db_path: Path) -> Path:
             product_exams="[]", principal_exams="[]", registered_states="CA",
             disclosure_count=0, ia_disclosure_count=0, raw_current_employments=None,
             raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
+    _insert(conn, "iar_details", ind_source_id="1000009", ia_scope="Active",
+            industry_start_date="2017-01-01", has_disclosure="N", ia_has_disclosure="N",
+            current_firm_id="100001", current_firm_name="ALPHA WEALTH LLC",
+            current_firm_since="2017-01-01", current_branch_city="NEW YORK",
+            current_branch_state="NY", prev_employment_count=0, state_exams="[]",
+            product_exams="[]", principal_exams="[]", registered_states="NY",
+            disclosure_count=0, ia_disclosure_count=0, raw_current_employments=None,
+            raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
     # 1000004 (O'HEARN), 1000007 (UNKNOWNFLAG), 1000008 (NOROW): NO iar_details
     # row inserted for any of them, deliberately.
 
@@ -448,7 +473,7 @@ def build_source_db(db_path: Path) -> Path:
         "source_file": "/fixtures/fixture_source.csv", "total_firms": "3", "skipped": "0",
         "ingest_date": "2026-05-18 09:15:19", "individuals_as_of": "2024-12-31",
         "firms_as_of": "2026-05-01", "website_check_as_of": "2026-05-19",
-        "ia_reps_as_of": "2026-05-20", "ia_reps_count": "8",
+        "ia_reps_as_of": "2026-05-20", "ia_reps_count": "9",
     }.items():
         _insert(conn, "ingest_meta", key=k, value=v)
 

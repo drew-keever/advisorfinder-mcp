@@ -76,3 +76,27 @@ def test_check_no_numeric_score_in_any_branch():
     _no_numeric_score_anywhere(server.check_advisor(name_or_crd="1000002"))
     _no_numeric_score_anywhere(server.check_advisor(name_or_crd="smith"))
     _no_numeric_score_anywhere(server.check_advisor(name_or_crd="zzznomatchzzz"))
+
+
+def test_check_accented_name_matches_fixture_advisor():
+    result = server.check_advisor(name_or_crd="jose garcia")
+    assert result["found"] is True
+    assert result["crd"] == "1000009"
+
+
+def test_check_unsanitizable_name_returns_error_not_browse():
+    # A SUPPLIED name that sanitizes to nothing must never fall through to
+    # db.search_advisors() and present a browse's worth of arbitrary rows as
+    # "ambiguous candidates" -- it must surface a clear error instead.
+    result = server.check_advisor(name_or_crd="!!!")
+    _envelope_keys_present(result)
+    assert "error" in result
+    assert result.get("found") is None
+    assert result.get("ambiguous") is not True
+
+
+def test_check_unsanitizable_firm_returns_error_not_browse():
+    result = server.check_advisor(name_or_crd="smith", firm="***")
+    _envelope_keys_present(result)
+    assert "error" in result
+    assert result.get("ambiguous") is not True
