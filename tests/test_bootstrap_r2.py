@@ -161,13 +161,71 @@ def test_ensure_db_schema_version_mismatch_raises_no_sidecar(r2_env):
     with pytest.raises(RuntimeError, match="schemaVersion"):
         bootstrap.ensure_db(client=client)
 
-    # The file itself passed sha/size verification and was replaced into
-    # place — only the schemaVersion cross-check (which runs after
-    # set_db_path/assert_schema_version) fails. The sidecar must NOT have
-    # been written: writing it here would poison the restart fast-path,
-    # letting a schema-mismatched DB reuse itself (skip verification
-    # entirely) on the next boot.
+    # The manifest's own declared schemaVersion is checked BEFORE the DB
+    # object is ever fetched (fail-fast — no point paying for the GET just
+    # to reject it afterward): the db object must never have been requested,
+    # and neither the final file nor the sidecar may exist.
+    assert client.calls == [("advisorfinder-mcp", "manifest.json")]
+    assert not (db_dir / "mcp_public.db").exists()
     assert not (db_dir / "mcp_public.db.sha256").exists()
+    assert not (db_dir / "mcp_public.db.tmp").exists()
+
+
+def test_ensure_db_post_replace_assert_schema_version_failure_cleans_up(r2_env, monkeypatch):
+    """Even when the manifest's declared schemaVersion matches and the
+    sha256/size both check out during streaming, db.assert_schema_version()
+    (which reads the ACTUAL file's embedded schema_version) is the final
+    authority. If it raises for any reason, the file it just verified-then-
+    replaced into place must not survive — otherwise a failed verification
+    would leave a file in place that a later restart's sidecar-match
+    fast-path could silently reuse without ever re-checking it."""
+    db_dir = r2_env
+    client = FakeS3Client({
+        "manifest.json": _manifest_bytes(),
+        "mcp_public.db": FIXTURE_BYTES,
+    })
+
+    def _boom():
+        raise RuntimeError("schema version mismatch: simulated real-file check failure")
+
+    monkeypatch.setattr(db, "assert_schema_version", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated real-file check failure"):
+        bootstrap.ensure_db(client=client)
+
+    assert not (db_dir / "mcp_public.db").exists()
+    assert not (db_dir / "mcp_public.db.sha256").exists()
+    assert not (db_dir / "mcp_public.db.tmp").exists()
+
+
+# ── malformed manifest.json ─────────────────────────────────────────────────────
+
+def test_ensure_db_malformed_manifest_json_raises(r2_env):
+    client = FakeS3Client({
+        "manifest.json": b"{not valid json!!!",
+        "mcp_public.db": FIXTURE_BYTES,
+    })
+
+    with pytest.raises(RuntimeError, match="corrupt or incomplete manifest.json"):
+        bootstrap.ensure_db(client=client)
+
+    # Fails while parsing the manifest, well before any db-object fetch.
+    assert client.calls == [("advisorfinder-mcp", "manifest.json")]
+
+
+def test_ensure_db_manifest_missing_sha256_raises(r2_env):
+    incomplete_manifest = json.dumps(
+        {"sizeBytes": FIXTURE_SIZE, "schemaVersion": SCHEMA_VERSION}
+    ).encode()
+    client = FakeS3Client({
+        "manifest.json": incomplete_manifest,
+        "mcp_public.db": FIXTURE_BYTES,
+    })
+
+    with pytest.raises(RuntimeError, match="corrupt or incomplete manifest.json"):
+        bootstrap.ensure_db(client=client)
+
+    assert client.calls == [("advisorfinder-mcp", "manifest.json")]
 
 
 # ── restart fast-path: sidecar match means no re-download ──────────────────────

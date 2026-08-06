@@ -97,10 +97,24 @@ def ensure_db(client=None) -> Path:
         )
 
     manifest_obj = client.get_object(Bucket=bucket, Key=manifest_key)
-    manifest = json.loads(manifest_obj["Body"].read())
-    expected_sha = manifest["sha256"]
-    expected_size = manifest["sizeBytes"]
-    manifest_schema_version = manifest["schemaVersion"]
+    try:
+        manifest = json.loads(manifest_obj["Body"].read())
+        expected_sha = manifest["sha256"]
+        expected_size = manifest["sizeBytes"]
+        manifest_schema_version = int(manifest["schemaVersion"])
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"corrupt or incomplete manifest.json: {exc!r}") from exc
+
+    # Fail fast, before ever touching the DB object: a manifest whose own
+    # declared schemaVersion doesn't match this server means the export is
+    # simply the wrong shape for us, no download can fix that, and there's
+    # no reason to pay for (or wait on) the multi-hundred-MB GET below just
+    # to reject it after the fact.
+    if manifest_schema_version != SCHEMA_VERSION:
+        raise RuntimeError(
+            f"manifest schemaVersion={manifest_schema_version!r} does not match "
+            f"this server's SCHEMA_VERSION={SCHEMA_VERSION} — redeploy a matching export"
+        )
 
     db_dir.mkdir(parents=True, exist_ok=True)
     final_path = db_dir / _LOCAL_DB_NAME
@@ -143,21 +157,28 @@ def ensure_db(client=None) -> Path:
 
     # set_db_path + assert_schema_version run whether we just downloaded or
     # reused the cached file — both paths must prove the DB on disk actually
-    # matches this server's expected schema before anything queries it.
-    db.set_db_path(final_path)
-    db.assert_schema_version()
-    if int(manifest_schema_version) != SCHEMA_VERSION:
-        raise RuntimeError(
-            f"manifest schemaVersion={manifest_schema_version!r} does not match "
-            f"this server's SCHEMA_VERSION={SCHEMA_VERSION} — redeploy a matching export"
-        )
+    # matches this server's expected schema before anything queries it. If
+    # this fails for ANY reason (the file's actual embedded schema_version
+    # disagrees with what the manifest claimed, or is simply unreadable),
+    # final_path must not survive: leaving a verified-looking file in place
+    # after a failed verification would both let the server limp along
+    # against bad data if something ignored the raised error, and poison the
+    # next restart's sidecar-match fast-path into reusing that same bad file
+    # without ever re-checking it.
+    try:
+        db.set_db_path(final_path)
+        db.assert_schema_version()
+    except Exception:
+        if final_path.exists():
+            final_path.unlink()
+        if sidecar_path.exists():
+            sidecar_path.unlink()
+        raise
 
     # Sidecar is written ONLY after a fresh download has passed every check
-    # above (sha/size during streaming, schema version just now) — never
-    # written on the reuse path (nothing changed, sidecar already matches)
-    # and never written before the schemaVersion cross-check, so a
-    # schema-mismatched download can't poison the restart fast-path into
-    # reusing bad data next boot without re-verifying.
+    # above (sha/size during streaming, schema version pre-check, and now
+    # assert_schema_version against the real file) — never written on the
+    # reuse path (nothing changed, sidecar already matches).
     if not reused:
         sidecar_path.write_text(expected_sha)
 
