@@ -18,20 +18,28 @@ Design notes (why the population looks the way it does):
   interpolates and what check_advisor's "all digits -> CRD" branch keys on. Using
   non-numeric ids like "IND001" (as the export-script's own test fixture does)
   would make the CRD-lookup path in check_advisor untestable.
-- Four disclosure states are covered by construction:
-    1000001 JANE SMITH        has_disclosure='N'                    -> none_reported
-    1000002 JOHN SMITH        has_disclosure='Y', count=3            -> disclosed_with_detail
-    1000003 MARY JONES        has_disclosure='Y', count=0            -> disclosed_no_detail
-    1000004 SAM O'HEARN       has_disclosure='Y', NO iar_details row -> unknown
-    1000005 PATRICK MCDONALD III  has_disclosure='N'                 -> none_reported (2 firms)
-    1000006 ALEX NG           has_disclosure='N'                     -> none_reported
+- Four disclosure states are covered by construction, per the CORRECTED
+  contract (keyed on has_disclosure ONLY — iar_details row presence only
+  distinguishes the two Y sub-states; see format.disclosure_status()):
+    1000001 JANE SMITH        has_disclosure='N', row exists            -> none_reported
+    1000002 JOHN SMITH        has_disclosure='Y', row, count=3          -> disclosed_with_detail
+    1000003 MARY JONES        has_disclosure='Y', row, count=0          -> disclosed_no_detail
+    1000004 SAM O'HEARN       has_disclosure='Y', NO iar_details row    -> disclosed_no_detail
+    1000005 PATRICK MCDONALD III  has_disclosure='N', row exists        -> none_reported (2 firms)
+    1000006 ALEX NG           has_disclosure='N', row exists            -> none_reported
+    1000007 CASEY UNKNOWNFLAG has_disclosure=NULL, NO iar_details row   -> unknown
+    1000008 MORGAN NOROW      has_disclosure='N', NO iar_details row    -> none_reported
   JANE SMITH and JOHN SMITH share last name SMITH -> ambiguous check_advisor("smith").
-  Deliberately no has_disclosure='N' + no-iar_details-row advisor: the export's own
-  tally counts hd=='N' as none_reported unconditionally regardless of row existence,
-  while the server's four-state renderer checks "no iar_details row" first (-> unknown).
-  Keeping that combination out of the fixture keeps the tally and the per-advisor
-  render in agreement; a real 'N' rep who was never detail-fetched would surface this
-  divergence, noted in the task report rather than "fixed" by reordering the checks.
+  1000004/1000007/1000008 all lack an iar_details row, pinning all three ways
+  that absence interacts with has_disclosure: 'Y' -> disclosed_no_detail (NOT
+  unknown — a known disclosure must never soften just because we lack detail);
+  'N' -> none_reported (row existence is irrelevant once the flag says N);
+  NULL/missing -> unknown (the only case row-absence combines with a genuinely
+  unresolved flag). An earlier version of this fixture omitted 1000008 and
+  used the OLD contract's ordering (row-absence checked before the flag),
+  which contradicted the export script's own aggregate tally (hd=='N' counts
+  as none_reported unconditionally); the coordinator's spec correction
+  resolved that contradiction by keying strictly off has_disclosure.
 """
 import json
 import sqlite3
@@ -323,6 +331,16 @@ def build_source_db(db_path: Path) -> Path:
     _insert(conn, "ia_reps", ind_source_id="1000006", first_name="ALEX", last_name="NG",
             ia_scope="Active", has_disclosure="N", branch_states='["CA"]',
             fetched_date="2026-05-20")
+    # 1000007: has_disclosure NULL/missing, no iar_details row -> pins 'unknown'
+    # (the only state where row-absence combines with a genuinely unresolved flag).
+    _insert(conn, "ia_reps", ind_source_id="1000007", first_name="CASEY",
+            last_name="UNKNOWNFLAG", ia_scope="Active", has_disclosure=None,
+            branch_states='["NY"]', fetched_date="2026-05-20")
+    # 1000008: has_disclosure='N', no iar_details row -> pins none_reported even
+    # without a detail row (row existence is irrelevant once the flag says N).
+    _insert(conn, "ia_reps", ind_source_id="1000008", first_name="MORGAN",
+            last_name="NOROW", ia_scope="Active", has_disclosure="N",
+            branch_states='["NY"]', fetched_date="2026-05-20")
 
     # ── ia_rep_firms: firm 100001 roster + firm 100002 roster; 1000005 at both;
     #    firm 100003 has NO rows at all -> empty-roster caveat vs its declared
@@ -342,6 +360,12 @@ def build_source_db(db_path: Path) -> Path:
     _insert(conn, "ia_rep_firms", ind_source_id="1000006", crd_number="100001",
             firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
             ia_only="Y")
+    _insert(conn, "ia_rep_firms", ind_source_id="1000007", crd_number="100001",
+            firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
+            ia_only="Y")
+    _insert(conn, "ia_rep_firms", ind_source_id="1000008", crd_number="100001",
+            firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
+            ia_only="Y")
     _insert(conn, "ia_rep_firms", ind_source_id="1000003", crd_number="100002",
             firm_name="BETA ADVISORS INC", branch_city="BOSTON", branch_state="MA",
             ia_only="Y")
@@ -349,8 +373,9 @@ def build_source_db(db_path: Path) -> Path:
             firm_name="BETA ADVISORS INC", branch_city="BOSTON", branch_state="MA",
             ia_only="Y")
 
-    # ── iar_details: covers with_detail / no_detail / none_reported states;
-    #    1000004 (O'HEARN) deliberately has NO row -> unknown ────────────────
+    # ── iar_details: covers with_detail / no_detail / none_reported states.
+    #    1000004/1000007/1000008 deliberately have NO row at all (see below) —
+    #    they pin, respectively, disclosed_no_detail / unknown / none_reported. ──
     _insert(conn, "iar_details", ind_source_id="1000001", ia_scope="Active",
             industry_start_date="not-a-real-date",  # exercises defensive-parse -> None
             has_disclosure="N", ia_has_disclosure="N", current_firm_id="100001",
@@ -396,7 +421,8 @@ def build_source_db(db_path: Path) -> Path:
             product_exams="[]", principal_exams="[]", registered_states="CA",
             disclosure_count=0, ia_disclosure_count=0, raw_current_employments=None,
             raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
-    # 1000004 (O'HEARN): NO iar_details row inserted at all.
+    # 1000004 (O'HEARN), 1000007 (UNKNOWNFLAG), 1000008 (NOROW): NO iar_details
+    # row inserted for any of them, deliberately.
 
     # ── advisor_content: 'provided' (1000002) vs 'name_unique' (1000003) ────
     _insert(conn, "advisor_content", ind_source_id="1000002",
@@ -422,7 +448,7 @@ def build_source_db(db_path: Path) -> Path:
         "source_file": "/fixtures/fixture_source.csv", "total_firms": "3", "skipped": "0",
         "ingest_date": "2026-05-18 09:15:19", "individuals_as_of": "2024-12-31",
         "firms_as_of": "2026-05-01", "website_check_as_of": "2026-05-19",
-        "ia_reps_as_of": "2026-05-20", "ia_reps_count": "6",
+        "ia_reps_as_of": "2026-05-20", "ia_reps_count": "8",
     }.items():
         _insert(conn, "ingest_meta", key=k, value=v)
 

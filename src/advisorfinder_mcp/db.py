@@ -65,6 +65,53 @@ def assert_schema_version() -> None:
         )
 
 
+def disclosure_tally() -> dict:
+    """Four-state disclosure tally over ALL ia_reps, computed directly here —
+    deliberately NOT read from export_meta's disclosure_tally_* fields.
+
+    Those fields are written by the (separately owned, already-reviewed)
+    export script in the firm-intelligence repo, to an OLDER four-state
+    contract that keyed the with-detail/no-detail split on "does an
+    iar_details row exist" rather than on has_disclosure alone. That
+    contract was corrected (coordinator spec correction, post-review): a
+    has_disclosure='Y' rep with no iar_details row is disclosed_no_detail,
+    not "uncounted" — softening a known disclosure to unknown for lack of
+    detail understates it. Recomputing here, with a CASE expression that
+    mirrors format.disclosure_status()'s exact bucketing, keeps this
+    aggregate and the per-advisor view from ever disagreeing again — trusting
+    export_meta's precomputed fields would silently reintroduce that
+    disagreement the next time the export script runs unchanged.
+    """
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN r.has_disclosure = 'N' THEN 1 ELSE 0 END)
+                    AS none_reported,
+                SUM(CASE WHEN r.has_disclosure = 'Y'
+                              AND COALESCE(d.disclosure_count, 0) > 0
+                         THEN 1 ELSE 0 END)
+                    AS disclosed_with_detail,
+                SUM(CASE WHEN r.has_disclosure = 'Y'
+                              AND COALESCE(d.disclosure_count, 0) <= 0
+                         THEN 1 ELSE 0 END)
+                    AS disclosed_no_detail,
+                SUM(CASE WHEN r.has_disclosure IS NULL
+                              OR r.has_disclosure NOT IN ('Y', 'N')
+                         THEN 1 ELSE 0 END)
+                    AS unknown
+            FROM ia_reps r
+            LEFT JOIN iar_details d ON d.ind_source_id = r.ind_source_id
+            """
+        ).fetchone()
+        return {
+            "none_reported": row["none_reported"] or 0,
+            "disclosed_no_detail": row["disclosed_no_detail"] or 0,
+            "disclosed_with_detail": row["disclosed_with_detail"] or 0,
+            "unknown": row["unknown"] or 0,
+        }
+
+
 # ── advisor search ────────────────────────────────────────────────────────────
 
 def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> list[dict]:

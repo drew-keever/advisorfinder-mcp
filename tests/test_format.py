@@ -72,17 +72,44 @@ def test_name_search_fallback_urls_present_and_quoted():
 
 
 # ── disclosure_status: four states ───────────────────────────────────────────
+# CORRECTED CONTRACT (coordinator spec correction, post-implementation): keyed
+# on ia_reps.has_disclosure ONLY. iar_details row presence only distinguishes
+# the two Y sub-states — it never demotes a Y or N rep to 'unknown'. The
+# original brief had 'no iar_details row' checked first (-> always unknown),
+# which contradicted the export script's own tally (hd=='N' counts as
+# none_reported unconditionally, row or no row) — that contradiction is what
+# this correction resolves.
+#   has_disclosure == 'Y' AND row exists AND (disclosure_count or 0) > 0
+#       -> disclosed_with_detail
+#   has_disclosure == 'Y' otherwise (row with count 0/NULL, OR no row at all)
+#       -> disclosed_no_detail
+#   has_disclosure == 'N' (regardless of row existence)
+#       -> none_reported
+#   has_disclosure NULL/empty/anything else
+#       -> unknown
 
-def test_disclosure_status_unknown_no_iar_row():
-    result = fmt.disclosure_status("Y", None)
+def test_disclosure_status_unknown_when_flag_is_null_regardless_of_row():
+    no_row = fmt.disclosure_status(None, None)
+    assert no_row["status"] == "unknown"
+    assert "no disclosures" not in no_row["guidance"].lower()
+
+    with_row = fmt.disclosure_status(None, {"disclosure_count": 5})
+    assert with_row["status"] == "unknown"
+
+
+def test_disclosure_status_unknown_for_other_non_yn_values():
+    result = fmt.disclosure_status("", None)
     assert result["status"] == "unknown"
-    assert "no disclosures" not in result["guidance"].lower()
 
 
-def test_disclosure_status_none_reported():
-    result = fmt.disclosure_status("N", {"disclosure_count": 0})
-    assert result["status"] == "none_reported"
-    assert result["guidance"] == "No disclosures reported."
+def test_disclosure_status_none_reported_regardless_of_row_existence():
+    with_row = fmt.disclosure_status("N", {"disclosure_count": 0})
+    assert with_row["status"] == "none_reported"
+    assert with_row["guidance"] == "No disclosures reported."
+
+    no_row = fmt.disclosure_status("N", None)
+    assert no_row["status"] == "none_reported"
+    assert no_row["guidance"] == "No disclosures reported."
 
 
 def test_disclosure_status_disclosed_with_detail():
@@ -93,7 +120,7 @@ def test_disclosure_status_disclosed_with_detail():
     assert "brokercheck" in result["guidance"].lower()
 
 
-def test_disclosure_status_disclosed_no_detail():
+def test_disclosure_status_disclosed_no_detail_row_with_zero_count():
     result = fmt.disclosure_status("Y", {"disclosure_count": 0})
     assert result["status"] == "disclosed_no_detail"
     assert "brokercheck" in result["guidance"].lower()
@@ -102,6 +129,15 @@ def test_disclosure_status_disclosed_no_detail():
 def test_disclosure_status_disclosed_no_detail_null_count():
     result = fmt.disclosure_status("Y", {"disclosure_count": None})
     assert result["status"] == "disclosed_no_detail"
+
+
+def test_disclosure_status_disclosed_no_detail_when_no_row_at_all():
+    # THE corrected case: 'Y' with no iar_details row must NOT soften to
+    # 'unknown' (that would understate a known disclosure) — it's
+    # disclosed_no_detail, same as a row with count 0.
+    result = fmt.disclosure_status("Y", None)
+    assert result["status"] == "disclosed_no_detail"
+    assert "brokercheck" in result["guidance"].lower()
 
 
 def test_disclosure_status_works_with_sqlite_row():
@@ -117,11 +153,13 @@ def test_disclosure_status_works_with_sqlite_row():
 @pytest.mark.parametrize("has_disclosure,iar_row", [
     ("Y", {"disclosure_count": 3}),
     ("Y", {"disclosure_count": 0}),
+    ("Y", None),
 ])
 def test_disclosure_status_never_phrased_clean_or_safe(has_disclosure, iar_row):
     result = fmt.disclosure_status(has_disclosure, iar_row)
     guidance_lower = result["guidance"].lower()
     assert "clean" not in guidance_lower
+    assert "safe" not in guidance_lower
     assert "safe" not in guidance_lower
 
 

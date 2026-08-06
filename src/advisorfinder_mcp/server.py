@@ -499,11 +499,17 @@ def get_database_stats() -> dict:
     firms and their active reps.
     """
     meta = db.get_meta()
-    none_reported = int(meta.get("disclosure_tally_none_reported", 0))
-    no_detail = int(meta.get("disclosure_tally_disclosed_no_detail", 0))
-    with_detail = int(meta.get("disclosure_tally_disclosed_with_detail", 0))
     advisors_count = int(meta.get("advisors_count", 0))
-    unknown = advisors_count - (none_reported + no_detail + with_detail)
+
+    # Recomputed directly via db.disclosure_tally() — deliberately NOT read
+    # from export_meta's disclosure_tally_* fields. Those are written by the
+    # export script to an older four-state contract (with-detail/no-detail
+    # keyed on iar_details row existence) that the coordinator's spec
+    # correction superseded; trusting the precomputed fields here would
+    # silently disagree with format.disclosure_status()'s per-advisor
+    # rendering (e.g. a 'Y' rep with no detail row is disclosed_no_detail,
+    # not "uncounted").
+    tally = db.disclosure_tally()
 
     state_firms_count = int(meta.get("state_firms_count", 0))
     state_firms_with_reps = int(meta.get("state_firms_with_reps", 0))
@@ -517,12 +523,7 @@ def get_database_stats() -> dict:
             "firms_as_of": meta.get("firms_as_of"),
             "individuals_bulk_as_of": meta.get("individuals_as_of"),
         },
-        "disclosure_tally": {
-            "none_reported": none_reported,
-            "disclosed_no_detail": no_detail,
-            "disclosed_with_detail": with_detail,
-            "unknown": unknown,
-        },
+        "disclosure_tally": tally,
         "coverage": {
             "state_firms_with_advisor_rosters": f"{state_firms_with_reps}/{state_firms_count}",
             "note": (

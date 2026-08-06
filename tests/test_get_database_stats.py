@@ -21,7 +21,7 @@ def test_counts_match_fixture():
     result = server.get_database_stats()
     assert result["firms_count"] == 3
     assert result["state_firms_count"] == 1
-    assert result["advisors_count"] == 6
+    assert result["advisors_count"] == 8
 
 
 def test_vintages_present():
@@ -31,12 +31,21 @@ def test_vintages_present():
 
 
 def test_disclosure_tally_includes_unknown_bucket():
+    # CORRECTED CONTRACT (keyed on has_disclosure only — see
+    # format.disclosure_status() / db.disclosure_tally()):
+    #   none_reported=4 (1000001,1000005,1000006,1000008 — all 'N', row or not)
+    #   disclosed_no_detail=2 (1000003 row+count0, 1000004 'Y' no row at all)
+    #   disclosed_with_detail=1 (1000002)
+    #   unknown=1 (1000007 — has_disclosure NULL/missing, no row)
+    # This tally is recomputed directly (db.disclosure_tally()), NOT read from
+    # export_meta's disclosure_tally_* fields — those encode the export
+    # script's OLDER contract and would undercount disclosed_no_detail here.
     result = server.get_database_stats()
     tally = result["disclosure_tally"]
-    assert tally["none_reported"] == 3
-    assert tally["disclosed_no_detail"] == 1
+    assert tally["none_reported"] == 4
+    assert tally["disclosed_no_detail"] == 2
     assert tally["disclosed_with_detail"] == 1
-    assert tally["unknown"] == 1  # SAM O'HEARN: has_disclosure='Y', no iar_details row
+    assert tally["unknown"] == 1
     assert sum(tally.values()) == result["advisors_count"]
 
 

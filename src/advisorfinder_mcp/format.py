@@ -102,24 +102,24 @@ def _row_value(row, key, default=None):
 
 
 def disclosure_status(has_disclosure: str | None, iar_row: Any) -> dict:
-    """Four states, checked in this literal order (per task-2-brief.md):
-      1. no iar_details row at all               -> unknown (never "no disclosures")
-      2. has_disclosure == 'N'                    -> none_reported
-      3. 'Y' and disclosure_count > 0             -> disclosed_with_detail
-      4. 'Y' otherwise (count 0/NULL)              -> disclosed_no_detail
-    A has_disclosure that is neither 'Y' nor 'N' (e.g. NULL) with a row present
-    also falls through to unknown — we don't have a definitive answer either way.
+    """Four states, keyed on ia_reps.has_disclosure ONLY — iar_row presence
+    only distinguishes the two Y sub-states, it never demotes a Y or N rep to
+    'unknown'. (CORRECTED CONTRACT — see task-2-report.md's post-review-fix
+    section: the original brief checked "no iar_details row" first, which
+    contradicted the export script's own aggregate tally, where hd=='N'
+    counts as none_reported unconditionally regardless of row existence. This
+    version resolves that contradiction: has_disclosure is the authoritative
+    roster flag; a 'Y' rep with no detail row must not soften to "unknown"
+    since that understates a known disclosure.)
+      has_disclosure == 'Y' AND row exists AND (disclosure_count or 0) > 0
+          -> disclosed_with_detail
+      has_disclosure == 'Y' otherwise (row with count 0/NULL, OR no row at all)
+          -> disclosed_no_detail
+      has_disclosure == 'N' (regardless of row existence)
+          -> none_reported
+      has_disclosure NULL/empty/anything else
+          -> unknown (never phrased as "no disclosures")
     """
-    if iar_row is None:
-        return {
-            "status": "unknown",
-            "guidance": (
-                "Disclosure status not available in our data — verify on "
-                "FINRA BrokerCheck / SEC IAPD."
-            ),
-        }
-    if has_disclosure == "N":
-        return {"status": "none_reported", "guidance": "No disclosures reported."}
     if has_disclosure == "Y":
         count = _row_value(iar_row, "disclosure_count", 0) or 0
         if count > 0:
@@ -138,6 +138,8 @@ def disclosure_status(has_disclosure: str | None, iar_row: Any) -> dict:
                 "Review the full record on FINRA BrokerCheck."
             ),
         }
+    if has_disclosure == "N":
+        return {"status": "none_reported", "guidance": "No disclosures reported."}
     return {
         "status": "unknown",
         "guidance": (

@@ -83,15 +83,24 @@ def test_years_in_industry_none_when_unparseable():
 
 
 def test_disclosure_four_states_across_fixture_advisors():
+    # CORRECTED CONTRACT: keyed on has_disclosure only. 1000004 (O'HEARN) has
+    # has_disclosure='Y' but NO iar_details row -> disclosed_no_detail (a
+    # known disclosure must never soften to 'unknown' for lack of detail).
+    # 1000007 (the only fixture advisor with a NULL/missing has_disclosure
+    # flag, also with no row) is the true 'unknown' pin.
     with_detail = server.get_advisor(crd="1000002")
-    no_detail = server.get_advisor(crd="1000003")
+    no_detail_with_row = server.get_advisor(crd="1000003")
+    no_detail_no_row = server.get_advisor(crd="1000004")
     none_reported = server.get_advisor(crd="1000001")
-    unknown = server.get_advisor(crd="1000004")
+    none_reported_no_row = server.get_advisor(crd="1000008")
+    unknown = server.get_advisor(crd="1000007")
 
     assert with_detail["disclosure"]["status"] == "disclosed_with_detail"
     assert with_detail["disclosure"]["disclosure_count"] == 3
-    assert no_detail["disclosure"]["status"] == "disclosed_no_detail"
+    assert no_detail_with_row["disclosure"]["status"] == "disclosed_no_detail"
+    assert no_detail_no_row["disclosure"]["status"] == "disclosed_no_detail"
     assert none_reported["disclosure"]["status"] == "none_reported"
+    assert none_reported_no_row["disclosure"]["status"] == "none_reported"
     assert unknown["disclosure"]["status"] == "unknown"
     assert "no disclosures" not in unknown["disclosure"]["guidance"].lower()
 
