@@ -5,9 +5,9 @@ serving traffic:
 
   1. Dev/test short-circuit: if MCP_DB_PATH is set and points at an existing
      file, use it directly — no network, no R2 credentials needed. This is
-     the path conftest.py's session fixture (and 122+ existing tests) rely
-     on; it is intentionally checked first and unconditionally, before any
-     R2 env var is even read.
+     the path conftest.py's session fixture (and most of this package's test
+     suite) relies on; it is intentionally checked first and unconditionally,
+     before any R2 env var is even read.
   2. Otherwise, download mcp_public.db from a private Cloudflare R2 bucket
      (S3-compatible API) via boto3, verifying it against a small manifest.json
      (sha256 + sizeBytes + schemaVersion) before ever pointing db.py at it.
@@ -30,13 +30,19 @@ from pathlib import Path
 
 from . import SCHEMA_VERSION, db
 
-# Streamed download chunk size, per task-3-brief.md ("8MB chunks").
+# Streamed download chunk size (8 MiB).
 _CHUNK_SIZE = 8 * 1024 * 1024
 
 _DEFAULT_BUCKET = "advisorfinder-mcp"
-_DEFAULT_DB_KEY = "mcp_public.db"
+_DEFAULT_DB_KEY = "mcp_public.db"  # default remote object key (R2_DB_KEY overrides)
 _DEFAULT_MANIFEST_KEY = "manifest.json"
 _DEFAULT_DB_DIR = "/tmp/adfi"
+
+# Local on-disk filename, independent of R2_DB_KEY: whatever the remote
+# object is called, it always lands at {DB_DIR}/mcp_public.db locally, so
+# db.py, the sidecar, and the restart fast-path all have one fixed name to
+# look for.
+_LOCAL_DB_NAME = "mcp_public.db"
 
 _REQUIRED_R2_ENV = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
 
@@ -97,9 +103,9 @@ def ensure_db(client=None) -> Path:
     manifest_schema_version = manifest["schemaVersion"]
 
     db_dir.mkdir(parents=True, exist_ok=True)
-    final_path = db_dir / _DEFAULT_DB_KEY
-    sidecar_path = db_dir / f"{_DEFAULT_DB_KEY}.sha256"
-    tmp_path = db_dir / f"{_DEFAULT_DB_KEY}.tmp"
+    final_path = db_dir / _LOCAL_DB_NAME
+    sidecar_path = db_dir / f"{_LOCAL_DB_NAME}.sha256"
+    tmp_path = db_dir / f"{_LOCAL_DB_NAME}.tmp"
 
     reused = (
         final_path.exists()

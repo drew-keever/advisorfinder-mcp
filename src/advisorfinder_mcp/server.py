@@ -536,8 +536,11 @@ def get_database_stats() -> dict:
 
 
 def main() -> None:
-    """Entry point: acquire the DB (bootstrap stub for now — Task 3 replaces
-    it with a real R2 download), then serve over streamable HTTP."""
+    """Entry point: acquire the DB (bootstrap.ensure_db() — MCP_DB_PATH in
+    dev/test, a verified R2 download in production), then serve over
+    streamable HTTP. This is what the Dockerfile's CMD runs
+    (`python -m advisorfinder_mcp.server`); the PyPI package's console
+    script is a different entry point — see proxy.py."""
     bootstrap.ensure_db()
     mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
