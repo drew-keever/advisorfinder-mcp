@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "advisorfinder-mcp"
-version = "1.2.0"
-description = "MCP server for querying SEC-registered financial advisor data from IAPD and FINRA BrokerCheck"
+version = "2.0.0"
+description = "MCP server and client for SEC-registered financial advisor data — search, profiles, disclosures status, firm fees. By AdvisorFinder."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -24,16 +24,19 @@ dependencies = [
     "fastmcp>=3.4,<4.0",
 ]
 
+[project.optional-dependencies]
+server = ["boto3>=1.34"]
+
 [project.urls]
 Homepage = "https://advisorfinder.com"
 Repository = "https://github.com/drew-keever/advisorfinder-mcp"
 Issues = "https://github.com/drew-keever/advisorfinder-mcp/issues"
 
 [project.scripts]
-advisorfinder-mcp = "advisorfinder_mcp:main"
+advisorfinder-mcp = "advisorfinder_mcp.proxy:main"
 
 [tool.hatch.build.targets.sdist]
-include = ["advisorfinder_mcp.py", "README.md", "LICENSE"]
+include = ["src", "README.md", "LICENSE"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/advisorfinder_mcp"]

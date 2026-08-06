@@ -2,9 +2,18 @@ services:
   - type: web
     name: advisorfinder-mcp
     runtime: docker
-    dockerfilePath: ./mcp_server/Dockerfile
-    dockerContext: ./mcp_server
-    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
     envVars:
-      - key: PORT
-        value: "8080"
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        value: advisorfinder-mcp
+      - key: DB_DIR
+        value: /tmp/adfi
