@@ -1,4 +1,6 @@
-"""Tests for advisorfinder_mcp.bootstrap (stub) and advisorfinder_mcp.db.
+"""Tests for advisorfinder_mcp.bootstrap's MCP_DB_PATH short-circuit and
+advisorfinder_mcp.db. See test_bootstrap_r2.py for the R2-download branch
+(fake S3 client, no network).
 
 conftest.py has already set MCP_DB_PATH to the fixture and called
 bootstrap.ensure_db() once (session-scoped autouse fixture) by the time these
@@ -14,7 +16,7 @@ from advisorfinder_mcp import bootstrap, db
 FIXTURE_DB = Path(__file__).parent / "fixtures" / "mcp_public.db"
 
 
-# ── bootstrap stub ───────────────────────────────────────────────────────────
+# ── bootstrap: MCP_DB_PATH short-circuit ─────────────────────────────────────
 
 def test_ensure_db_honors_mcp_db_path(monkeypatch):
     monkeypatch.setenv("MCP_DB_PATH", str(FIXTURE_DB))
@@ -23,21 +25,33 @@ def test_ensure_db_honors_mcp_db_path(monkeypatch):
     assert db.DB_PATH == FIXTURE_DB
 
 
-def test_ensure_db_missing_file_raises(monkeypatch):
+def test_ensure_db_missing_file_falls_through_to_r2_and_raises(monkeypatch):
+    """MCP_DB_PATH pointing at a nonexistent file does NOT short-circuit —
+    ensure_db() falls through to the R2 branch, which raises because none of
+    the R2_* env vars are set in this test."""
     monkeypatch.setenv("MCP_DB_PATH", "/nonexistent/path/mcp_public.db")
-    with pytest.raises(RuntimeError, match="R2 download not implemented"):
+    monkeypatch.delenv("R2_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="R2_ACCOUNT_ID"):
         bootstrap.ensure_db()
 
 
 def test_ensure_db_no_env_var_raises(monkeypatch):
     monkeypatch.delenv("MCP_DB_PATH", raising=False)
-    with pytest.raises(RuntimeError, match="R2 download not implemented"):
+    monkeypatch.delenv("R2_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="R2_ACCOUNT_ID"):
         bootstrap.ensure_db()
 
 
 def test_ensure_db_restores_after_failed_attempts(monkeypatch):
     """A failed ensure_db() call must not corrupt the working DB_PATH for later tests."""
     monkeypatch.setenv("MCP_DB_PATH", "/nonexistent/path/mcp_public.db")
+    monkeypatch.delenv("R2_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
     with pytest.raises(RuntimeError):
         bootstrap.ensure_db()
     # restore real path and confirm it still works
