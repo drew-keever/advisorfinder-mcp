@@ -1,0 +1,314 @@
+"""SQL access layer for advisorfinder_mcp.
+
+Holds all query functions used by the server's tools, plus connection/schema
+plumbing. server.py holds tool orchestration and consumer-facing wording;
+this module holds SQL and nothing else.
+"""
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+
+from . import SCHEMA_VERSION
+from .format import fts_query
+
+# Set by bootstrap.ensure_db() (or directly by tests) before any query runs.
+DB_PATH: Path | None = None
+
+# get_meta() result, cached per DB_PATH. Cleared by set_db_path() so a
+# re-pointed DB_PATH never hands back another database's stale meta.
+_meta_cache: dict | None = None
+
+
+def set_db_path(path) -> None:
+    """Point the module at a DB file and invalidate the cached export_meta."""
+    global DB_PATH, _meta_cache
+    DB_PATH = Path(path)
+    _meta_cache = None
+
+
+@contextmanager
+def get_conn():
+    """Read-only, immutable connection to DB_PATH. Raises RuntimeError if no
+    path has been set yet (bootstrap.ensure_db() hasn't run)."""
+    if DB_PATH is None:
+        raise RuntimeError("advisorfinder_mcp.db: no DB path set — call bootstrap.ensure_db() first")
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro&immutable=1", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA cache_size=-32000")
+    conn.execute("PRAGMA mmap_size=268435456")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def get_meta() -> dict:
+    """export_meta as a plain dict, cached for the lifetime of the current
+    DB_PATH (see set_db_path)."""
+    global _meta_cache
+    if _meta_cache is None:
+        with get_conn() as conn:
+            rows = conn.execute("SELECT key, value FROM export_meta").fetchall()
+        _meta_cache = {r["key"]: r["value"] for r in rows}
+    return _meta_cache
+
+
+def assert_schema_version() -> None:
+    """Raises RuntimeError if the DB's export_meta.schema_version (a string)
+    doesn't match this package's SCHEMA_VERSION (an int)."""
+    meta = get_meta()
+    found = int(meta["schema_version"])
+    if found != SCHEMA_VERSION:
+        raise RuntimeError(
+            f"schema version mismatch: mcp_public.db has schema_version={found}, "
+            f"this server expects {SCHEMA_VERSION} — redeploy a matching export"
+        )
+
+
+# ── advisor search ────────────────────────────────────────────────────────────
+
+def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> list[dict]:
+    """Returns up to `limit` advisor bundles matching all supplied filters
+    (AND semantics across name/firm/city/state). Each bundle: ind_source_id,
+    first/middle/last name, has_disclosure, `firms` (every ia_rep_firms row
+    for that advisor — not just the ones that matched a firm/city/state
+    filter), and `iar_row` (the iar_details row, or None -> 'unknown' four-
+    state disclosure).
+
+    All filtering (name/firm/city/state) AND the LIMIT are pushed into a
+    single SQL statement via correlated subqueries against ia_reps — this is
+    deliberate, not just tidiness: an earlier version built Python-side ID
+    sets and passed them back into SQL as `IN (?, ?, ..., ?)` with one
+    placeholder per candidate. On the real export (ia_rep_firms ~= 311k rows),
+    a plain state/city browse can match tens of thousands of ids, well past
+    SQLite's ~32766-variable ceiling (`sqlite3.OperationalError: too many SQL
+    variables`) — invisible in this fixture's 6-advisor scale, but a
+    guaranteed crash against production data. LIMIT now runs before the
+    per-advisor firm/iar_details fetches below, so those touch at most
+    `limit` rows regardless of how large the underlying match set is.
+
+    "Empty after sanitize = treat as absent" (per task-2-brief.md, stated for
+    `name`) is applied uniformly to `firm` too, since both go through the same
+    fts_query() sanitizer: a firm filter that sanitizes to nothing just drops
+    that constraint rather than forcing zero results.
+    """
+    with get_conn() as conn:
+        where = ["1=1"]
+        params: list = []
+
+        firm_city_state_conditions = []
+        firm_city_state_params: list = []
+        if firm:
+            q = fts_query(firm)
+            if q:
+                firm_city_state_conditions.append(
+                    "crd_number IN (SELECT DISTINCT crd_number FROM firm_fts WHERE firm_fts MATCH ?)"
+                )
+                firm_city_state_params.append(q)
+        if city:
+            firm_city_state_conditions.append("branch_city = ? COLLATE NOCASE")
+            firm_city_state_params.append(city)
+        if state:
+            firm_city_state_conditions.append("branch_state = ? COLLATE NOCASE")
+            firm_city_state_params.append(state)
+
+        if firm_city_state_conditions:
+            sub_where = " AND ".join(firm_city_state_conditions)
+            where.append(f"ind_source_id IN (SELECT ind_source_id FROM ia_rep_firms WHERE {sub_where})")
+            params.extend(firm_city_state_params)
+
+        if name:
+            q = fts_query(name)
+            if q:  # empty-after-sanitize -> treat as absent: no clause added
+                where.append(
+                    "ind_source_id IN (SELECT ind_source_id FROM advisor_fts WHERE advisor_fts MATCH ?)"
+                )
+                params.append(q)
+
+        sql = (
+            "SELECT ind_source_id, first_name, middle_name, last_name, has_disclosure "
+            "FROM ia_reps WHERE " + " AND ".join(where) + " "
+            "ORDER BY last_name, first_name LIMIT ?"
+        )
+        params.append(limit)
+
+        advisor_rows = conn.execute(sql, params).fetchall()
+
+        results = []
+        for r in advisor_rows:
+            ind = r["ind_source_id"]
+            firm_rows = conn.execute(
+                "SELECT crd_number, firm_name, branch_city, branch_state "
+                "FROM ia_rep_firms WHERE ind_source_id = ?",
+                (ind,),
+            ).fetchall()
+            iar_row = conn.execute(
+                "SELECT * FROM iar_details WHERE ind_source_id = ?", (ind,)
+            ).fetchone()
+            results.append({
+                "ind_source_id": ind,
+                "first_name": r["first_name"],
+                "middle_name": r["middle_name"],
+                "last_name": r["last_name"],
+                "has_disclosure": r["has_disclosure"],
+                "firms": [dict(fr) for fr in firm_rows],
+                "iar_row": dict(iar_row) if iar_row else None,
+            })
+        return results
+
+
+def get_advisor(crd: str) -> dict | None:
+    """Full advisor bundle for get_advisor/check_advisor. None if `crd` isn't
+    in ia_reps (i.e. not an exported, Active, roster-linked advisor)."""
+    with get_conn() as conn:
+        rep = conn.execute("SELECT * FROM ia_reps WHERE ind_source_id = ?", (crd,)).fetchone()
+        if rep is None:
+            return None
+        iar = conn.execute("SELECT * FROM iar_details WHERE ind_source_id = ?", (crd,)).fetchone()
+        employments = conn.execute(
+            "SELECT * FROM advisor_employments WHERE ind_source_id = ? "
+            "ORDER BY is_current DESC, start_date DESC",
+            (crd,),
+        ).fetchall()
+        content = conn.execute(
+            "SELECT * FROM advisor_content WHERE ind_source_id = ?", (crd,)
+        ).fetchone()
+        designations = conn.execute(
+            "SELECT * FROM advisor_designations WHERE ind_source_id = ?", (crd,)
+        ).fetchall()
+        firms = conn.execute(
+            "SELECT * FROM ia_rep_firms WHERE ind_source_id = ?", (crd,)
+        ).fetchall()
+        return {
+            "rep": dict(rep),
+            "iar": dict(iar) if iar else None,
+            "employments": [dict(e) for e in employments],
+            "content": dict(content) if content else None,
+            "designations": [dict(d) for d in designations],
+            "firms": [dict(f) for f in firms],
+        }
+
+
+# ── firm search ───────────────────────────────────────────────────────────────
+
+def search_firms(name=None, state=None, limit=20) -> list[dict]:
+    """Returns up to `limit` firm bundles. firm_fts kinds: primary/legal/other
+    (from `firms`) and state (from firms_state, disjoint from `firms` by
+    construction). `kinds` on each bundle is the set of kinds that matched (or,
+    with no name filter, {'primary'}/{'state'} for a plain browse); the caller
+    decides matched_as / state caveat from that.
+
+    The state filter is pushed into SQL (COLLATE NOCASE equality — a single
+    bound parameter, not a per-row Python-side scan) for both the `firms` and
+    `firms_state` fetches, whether or not a name was given. When a name IS
+    given, the crd_number IN (...) list is bounded by firm_fts match count
+    (typically small — actual search hits), not by table size, so it doesn't
+    carry the same "too many SQL variables" risk as search_advisors' id sets
+    did before that was fixed.
+    """
+    with get_conn() as conn:
+        hits: dict[str, dict] | None = None
+
+        if name:
+            q = fts_query(name)
+            if not q:  # empty-after-sanitize -> treat as absent (browse mode)
+                name = None
+            else:
+                hits = {}
+                rows = conn.execute(
+                    "SELECT crd_number, kind, name FROM firm_fts WHERE firm_fts MATCH ?", (q,)
+                ).fetchall()
+                for r in rows:
+                    entry = hits.setdefault(r["crd_number"], {"kinds": set(), "other_name": None})
+                    entry["kinds"].add(r["kind"])
+                    if r["kind"] == "other":
+                        entry["other_name"] = r["name"]
+                if not hits:
+                    return []
+
+        fsql = "SELECT * FROM firms WHERE 1=1"
+        fparams: list = []
+        ssql = "SELECT * FROM firms_state WHERE 1=1"
+        sparams: list = []
+        if hits is not None:
+            crds = list(hits)
+            placeholders = ",".join("?" * len(crds))
+            fsql += f" AND crd_number IN ({placeholders})"
+            fparams.extend(crds)
+            ssql += f" AND crd_number IN ({placeholders})"
+            sparams.extend(crds)
+        if state:
+            fsql += " AND address_state = ? COLLATE NOCASE"
+            fparams.append(state)
+            ssql += " AND address_state = ? COLLATE NOCASE"
+            sparams.append(state)
+
+        results = []
+        for frow in conn.execute(fsql, fparams).fetchall():
+            crd = frow["crd_number"]
+            info = hits[crd] if hits is not None else {"kinds": {"primary"}, "other_name": None}
+            results.append({
+                "crd_number": crd,
+                "name": frow["primary_name"],
+                "city": frow["address_city"],
+                "state": frow["address_state"],
+                "aum_band": frow["aum_band"],
+                "advisor_count": frow["investment_adviser_reps"],
+                "kinds": info["kinds"],
+                "other_name": info["other_name"],
+                "state_only": False,
+            })
+        for srow in conn.execute(ssql, sparams).fetchall():
+            crd = srow["crd_number"]
+            info = hits[crd] if hits is not None else {"kinds": {"state"}, "other_name": None}
+            results.append({
+                "crd_number": crd,
+                "name": srow["primary_name"],
+                "city": srow["address_city"],
+                "state": srow["address_state"],
+                "aum_band": srow["aum_band"],
+                "advisor_count": None,
+                "kinds": info["kinds"],
+                "other_name": info["other_name"],
+                "state_only": True,
+            })
+
+        results.sort(key=lambda r: r["name"] or "")
+        return results[:limit]
+
+
+def get_firm(crd: str) -> dict | None:
+    """Full firm bundle for get_firm. None if `crd` is in neither `firms` nor
+    `firms_state`. `firm` is None (with `state_firm` populated) for a
+    state-only reduced profile."""
+    with get_conn() as conn:
+        frow = conn.execute("SELECT * FROM firms WHERE crd_number = ?", (crd,)).fetchone()
+        srow = conn.execute("SELECT * FROM firms_state WHERE crd_number = ?", (crd,)).fetchone()
+        if frow is None and srow is None:
+            return None
+
+        locations = conn.execute(
+            "SELECT * FROM firm_locations WHERE crd_number = ?", (crd,)
+        ).fetchall()
+        other_names = conn.execute(
+            "SELECT * FROM firm_other_names WHERE crd_number = ?", (crd,)
+        ).fetchall()
+        part2a = conn.execute(
+            "SELECT * FROM firm_part2a WHERE crd_number = ?", (crd,)
+        ).fetchone()
+        content = conn.execute(
+            "SELECT * FROM firm_content WHERE crd_number = ?", (crd,)
+        ).fetchone()
+        roster_count = conn.execute(
+            "SELECT COUNT(DISTINCT ind_source_id) FROM ia_rep_firms WHERE crd_number = ?", (crd,)
+        ).fetchone()[0]
+
+        return {
+            "firm": dict(frow) if frow else None,
+            "state_firm": dict(srow) if srow else None,
+            "locations": [dict(loc) for loc in locations],
+            "other_names": [dict(o) for o in other_names],
+            "part2a": dict(part2a) if part2a else None,
+            "content": dict(content) if content else None,
+            "roster_count": roster_count,
+        }

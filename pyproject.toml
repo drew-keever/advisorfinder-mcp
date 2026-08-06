@@ -36,4 +36,7 @@ advisorfinder-mcp = "advisorfinder_mcp:main"
 include = ["advisorfinder_mcp.py", "README.md", "LICENSE"]
 
 [tool.hatch.build.targets.wheel]
-include = ["advisorfinder_mcp.py"]
+packages = ["src/advisorfinder_mcp"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
