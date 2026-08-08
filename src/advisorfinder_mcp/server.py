@@ -166,7 +166,7 @@ def search_advisors(
         firms_out = [
             {
                 "crd_number": f["crd_number"],
-                "name": format.title_case_name(f["firm_name"]),
+                "name": format.title_case_firm_name(f["firm_name"]),
                 "branch_city": format.title_case_name(f["branch_city"]) if f["branch_city"] else None,
                 "branch_state": f["branch_state"],
             }
@@ -223,7 +223,7 @@ def get_advisor(crd: str) -> dict:
 
     employment = [
         {
-            "firm_name": format.title_case_name(e["firm_name"]),
+            "firm_name": format.title_case_firm_name(e["firm_name"]),
             "is_current": bool(e["is_current"]),
             "start_date": e["start_date"],
             "end_date": e["end_date"],
@@ -346,7 +346,7 @@ def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None =
             candidates.append({
                 "crd": r["ind_source_id"],
                 "name": _full_name(r["first_name"], r["middle_name"], r["last_name"]),
-                "firm": format.title_case_name(firm_name) if firm_name else None,
+                "firm": format.title_case_firm_name(firm_name) if firm_name else None,
             })
         return format.envelope(
             {
@@ -371,6 +371,10 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     record. State-registered-only firms (not SEC-registered) are included but
     flagged — our advisor roster coverage for those is much thinner.
     """
+    unsanitizable = _unsanitizable_supplied_filter(name=name)
+    if unsanitizable:
+        return _unsanitizable_filter_error(*unsanitizable)
+
     clamped_limit = max(1, min(limit, 50))
     rows = db.search_firms(name=name, state=state, limit=clamped_limit)
 
@@ -378,7 +382,7 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     for r in rows:
         entry = {
             "crd": r["crd_number"],
-            "name": format.title_case_name(r["name"]),
+            "name": format.title_case_firm_name(r["name"]),
             "city": format.title_case_name(r["city"]) if r["city"] else None,
             "state": r["state"],
             "aum_band": r["aum_band"],
@@ -386,7 +390,7 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
             "link": format.iapd_firm_url(r["crd_number"]),
         }
         if r["kinds"] == {"other"} and r["other_name"]:
-            entry["matched_as"] = f"also known as {format.title_case_name(r['other_name'])}"
+            entry["matched_as"] = f"also known as {format.title_case_firm_name(r['other_name'])}"
         if r["state_only"]:
             entry["caveat"] = (
                 "State-registered adviser — our advisor roster does not cover "
@@ -442,7 +446,7 @@ def get_firm(crd: str) -> dict:
             "found": True,
             "crd": crd,
             "reduced_profile": True,
-            "name": format.title_case_name(s["primary_name"]),
+            "name": format.title_case_firm_name(s["primary_name"]),
             "city": format.title_case_name(s["address_city"]) if s["address_city"] else None,
             "state": s["address_state"],
             "aum_band": s["aum_band"],
@@ -471,7 +475,7 @@ def get_firm(crd: str) -> dict:
                 "zip": loc["zip"],
             })
 
-    other_names = [format.title_case_name(o["other_name"]) for o in bundle["other_names"]]
+    other_names = [format.title_case_firm_name(o["other_name"]) for o in bundle["other_names"]]
 
     content_out = None
     if bundle["content"]:
@@ -495,8 +499,8 @@ def get_firm(crd: str) -> dict:
     payload = {
         "found": True,
         "crd": crd,
-        "name": format.title_case_name(f["primary_name"]),
-        "legal_name": format.title_case_name(f["legal_name"]) if f["legal_name"] else None,
+        "name": format.title_case_firm_name(f["primary_name"]),
+        "legal_name": format.title_case_firm_name(f["legal_name"]) if f["legal_name"] else None,
         "address": {
             "street1": f["address_street1"],
             "city": format.title_case_name(f["address_city"]) if f["address_city"] else None,

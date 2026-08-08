@@ -49,6 +49,21 @@ def title_case_name(s: str | None) -> str | None:
     return " ".join(out)
 
 
+# Legal-entity designators that must stay uppercase in firm names ("LLC", not
+# "Llc"). Compared with dots/commas stripped so "L.P.," matches "LP".
+_FIRM_ACRONYMS = {"LLC", "LLP", "LLLP", "LP", "PLLC", "PLC", "PC", "PA"}
+
+
+def title_case_firm_name(s: str | None) -> str | None:
+    cased = title_case_name(s)
+    if not cased:
+        return cased
+    return " ".join(
+        tok.upper() if tok.strip(",.").replace(".", "").upper() in _FIRM_ACRONYMS else tok
+        for tok in cased.split(" ")
+    )
+
+
 # ── verification link builders ────────────────────────────────────────────────
 
 def iapd_individual_url(crd) -> str:

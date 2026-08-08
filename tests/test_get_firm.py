@@ -17,13 +17,13 @@ def test_not_found_has_both_firm_search_links():
 
 
 def test_found_basic_identity_and_address():
-    # "Llc" (not "LLC"): title_case_name() has no entity-suffix special-casing
+    # Entity suffixes stay uppercase via title_case_firm_name ("LLC", not "Llc")
     # (copied verbatim from firm-intelligence's build_public_export.py) — see
     # the same note in test_get_advisor.py.
     result = server.get_firm(crd="100001")
     _envelope_keys_present(result)
     assert result["found"] is True
-    assert result["name"] == "Alpha Wealth Llc"
+    assert result["name"] == "Alpha Wealth LLC"
     assert result["address"]["city"] == "New York"
     assert result["address"]["state"] == "NY"
     assert result["website"] == "alphawealth.com"
@@ -53,7 +53,7 @@ def test_normal_location_has_street():
 
 def test_other_names_present():
     result = server.get_firm(crd="100001")
-    assert "Alpha Wealth Management Llc" in result["other_names"]
+    assert "Alpha Wealth Management LLC" in result["other_names"]
 
 
 def test_empty_roster_caveat_when_reps_declared_but_none_linked():

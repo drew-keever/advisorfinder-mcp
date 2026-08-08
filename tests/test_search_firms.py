@@ -69,3 +69,15 @@ def test_aum_band_field_present_on_every_result():
     result = server.search_firms(state="NY")
     for row in result["results"]:
         assert "aum_band" in row
+
+
+def test_search_firms_unsanitizable_name_errors_instead_of_browse():
+    result = server.search_firms(name="!!!")
+    assert "error" in result
+    assert not result.get("results")
+
+
+def test_search_firms_renders_llc_uppercase():
+    result = server.search_firms(name="alpha wealth")
+    names = {r["name"] for r in result["results"]}
+    assert "Alpha Wealth LLC" in names

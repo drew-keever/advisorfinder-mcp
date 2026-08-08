@@ -367,3 +367,20 @@ def test_years_since_computes_a_plausible_range():
 def test_years_since_none_for_unparseable():
     assert fmt.years_since("garbage") is None
     assert fmt.years_since(None) is None
+
+
+def test_title_case_firm_name_uppercases_entity_acronyms():
+    assert fmt.title_case_firm_name("ALPHA WEALTH LLC") == "Alpha Wealth LLC"
+    assert fmt.title_case_firm_name("SMITH ADVISORS PLLC") == "Smith Advisors PLLC"
+
+
+def test_title_case_firm_name_dotted_acronyms_keep_dots():
+    assert (
+        fmt.title_case_firm_name("EDWARD D. JONES & CO., L.P.")
+        == "Edward D. Jones & Co., L.P."
+    )
+
+
+def test_title_case_firm_name_idempotent_and_none():
+    assert fmt.title_case_firm_name("Alpha Wealth LLC") == "Alpha Wealth LLC"
+    assert fmt.title_case_firm_name(None) is None

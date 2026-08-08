@@ -168,3 +168,9 @@ def test_search_supplied_firm_unsanitizable_returns_error_not_browse():
     _envelope_keys_present(result)
     assert "error" in result
     assert "results" not in result
+
+
+def test_search_curly_apostrophe_matches_ohearn():
+    result = server.search_advisors(name="O’Hearn")
+    crds = {r["crd"] for r in result["results"]}
+    assert "1000004" in crds

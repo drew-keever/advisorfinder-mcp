@@ -25,17 +25,14 @@ def test_found_basic_shape():
 
 
 def test_employment_current_first_then_previous():
-    # "Llc" (not "LLC") is the honest output of title_case_name(), copied
-    # verbatim from firm-intelligence's build_public_export.py — it has no
-    # entity-suffix special-casing. If that helper is ever taught to render
-    # entity suffixes properly, these two assertions are expected to change.
+    # Entity suffixes stay uppercase via title_case_firm_name ("LLC", not "Llc").
     result = server.get_advisor(crd="1000002")
     employment = result["employment"]
     assert len(employment) == 2
     assert employment[0]["is_current"] is True
-    assert employment[0]["firm_name"] == "Alpha Wealth Llc"
+    assert employment[0]["firm_name"] == "Alpha Wealth LLC"
     assert employment[1]["is_current"] is False
-    assert employment[1]["firm_name"] == "Old Legacy Brokerage Llc"
+    assert employment[1]["firm_name"] == "Old Legacy Brokerage LLC"
 
 
 def test_exams_parsed_from_json():
