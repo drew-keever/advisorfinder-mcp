@@ -1,6 +1,6 @@
 """Tests for advisorfinder_mcp.proxy — the stdio->remote proxy that is the
 PyPI package's actual entry point (`pip install advisorfinder-mcp` gets you
-this, not the server). Monkeypatches FastMCP.as_proxy to capture what it was
+this, not the server). Monkeypatches proxy.create_proxy to capture what it was
 called with; never actually calls .run() (that would block on stdio).
 """
 from advisorfinder_mcp import proxy
@@ -19,12 +19,12 @@ def test_main_uses_default_url_when_no_env_override(monkeypatch):
     captured = {}
     fake_app = _FakeProxyApp()
 
-    def fake_as_proxy(url, **kwargs):
+    def fake_create_proxy(url, **kwargs):
         captured["url"] = url
         captured["kwargs"] = kwargs
         return fake_app
 
-    monkeypatch.setattr(proxy.FastMCP, "as_proxy", staticmethod(fake_as_proxy))
+    monkeypatch.setattr(proxy, "create_proxy", fake_create_proxy)
 
     proxy.main()
 
@@ -38,11 +38,11 @@ def test_main_honors_url_env_override(monkeypatch):
     captured = {}
     fake_app = _FakeProxyApp()
 
-    def fake_as_proxy(url, **kwargs):
+    def fake_create_proxy(url, **kwargs):
         captured["url"] = url
         return fake_app
 
-    monkeypatch.setattr(proxy.FastMCP, "as_proxy", staticmethod(fake_as_proxy))
+    monkeypatch.setattr(proxy, "create_proxy", fake_create_proxy)
 
     proxy.main()
 

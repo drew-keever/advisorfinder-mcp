@@ -8,11 +8,11 @@ hosted server at ADVISORFINDER_MCP_URL (default: the production remote).
 """
 import os
 
-from fastmcp import FastMCP
+from fastmcp.server import create_proxy
 
 DEFAULT_URL = "https://mcp.advisorfinder.com/mcp"
 
 
 def main() -> None:
     url = os.environ.get("ADVISORFINDER_MCP_URL", DEFAULT_URL)
-    FastMCP.as_proxy(url, name="advisorfinder").run()  # stdio transport by default
+    create_proxy(url, name="advisorfinder").run()  # stdio transport by default
