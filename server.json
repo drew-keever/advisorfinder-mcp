@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.advisorfinder/mcp",
-  "description": "MCP server and client for SEC-registered financial advisor data — search, profiles, disclosures status, firm fees. By AdvisorFinder.",
+  "description": "Search and vet SEC-registered financial advisors: profiles, disclosures, firm fees, credentials.",
   "version": "2.0.0",
   "websiteUrl": "https://advisorfinder.com",
   "repository": {
