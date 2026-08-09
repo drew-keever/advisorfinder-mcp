@@ -79,6 +79,7 @@ Once configured, just talk to Claude naturally:
 - "Does John Doe have any disclosures on file?"
 - "Tell me about Edward Jones as a firm — how many advisors do they have, and what do they charge?"
 - "How many registered advisors are in the SEC database, and how fresh is the data?"
+- "Find a fee-only advisor near Austin I can actually book a call with"
 
 No CRD numbers needed — search by name, firm, city, or state.
 
@@ -89,6 +90,7 @@ No CRD numbers needed — search by name, firm, city, or state.
 | `search_advisors` | Search SEC-registered investment adviser representatives by name, firm, city, and/or state. Returns CRD, name, linked firm(s), a four-state disclosure status, and an SEC IAPD link per match. |
 | `get_advisor` | Full profile by CRD: employment history, exams, registered states, self-reported professional designations, years in the industry, and four-state disclosure status. |
 | `check_advisor` | Quick verification by CRD or name (optionally narrowed by firm/state): is the registration active, what states, how long in the industry, and disclosure status. Never returns a numeric risk score — only the underlying facts. |
+| `find_bookable_advisors` | Search advisors listed on AdvisorFinder's marketplace — a few hundred members with public profiles you can view and contact directly (optionally filtered by specialty, city, and/or state). Returns each member's self-provided profile info, a link to their full AdvisorFinder profile, and the same regulatory facts (registration, four-state disclosure) as any other advisor. |
 | `search_firms` | Search SEC- and state-registered investment adviser firms by name and/or state. Returns CRD, name, city/state, AUM band, advisor headcount, and an SEC IAPD link. State-registered-only firms are included but flagged as thinner-coverage. |
 | `get_firm` | Full firm profile by CRD: locations, other/prior names, fee schedule (from Form ADV Part 2A where available), disciplinary flags, and advisor roster count. |
 | `get_database_stats` | Database-wide stats: firm and advisor counts, data vintages (as-of dates for each upstream source), and a full four-state disclosure tally. |
@@ -101,7 +103,7 @@ No CRD numbers needed — search by name, firm, city, or state.
 |----------|-------------|
 | `advisorfinder://credentials-guide` | Guide to financial advisor credentials — CFP, CFA, CPA, ChFC, Series 7/65/66, and more (all self-reported; not independently verified here). |
 | `advisorfinder://data-sources` | About SEC IAPD, FINRA BrokerCheck, what we store vs. don't, and how to verify data independently. |
-| `advisorfinder://coverage-and-limitations` | What's covered, what isn't (state-only firms, disclosure detail, verified designations), and what an empty result actually means. |
+| `advisorfinder://coverage-and-limitations` | What's covered, what isn't (state-only firms, disclosure detail, verified designations, the AdvisorFinder marketplace), and what an empty result actually means. |
 
 ## Data & Limitations
 
@@ -112,6 +114,8 @@ No CRD numbers needed — search by name, firm, city, or state.
 **Designations are self-reported.** Every professional designation (CFP, CFA, etc.) shown here comes from the advisor's own filing — none of it is independently verified against the issuing body. Check directly with the issuing body if a credential matters to your decision.
 
 **No numeric risk score.** This server intentionally does not compress disclosure/registration facts into a single risk number — it surfaces the underlying facts so you can judge for yourself.
+
+**AdvisorFinder marketplace.** Some advisors are listed on AdvisorFinder's marketplace (`find_bookable_advisors`, and enrichment on other tools' results). Their listings add self-provided profile information and a link to contact them. Being listed is a business relationship with AdvisorFinder — it is labeled on every result, never affects search ranking, and is not an endorsement. Regulatory data is shown identically for all advisors. AUM and client-count figures in marketplace listings are self-reported, always labeled "as listed on their AdvisorFinder profile."
 
 ## Disclaimer
 
@@ -125,6 +129,15 @@ The data served through this tool originates from publicly available SEC and FIN
 - This tool should not be used as the sole basis for selecting, evaluating, or dismissing a financial advisor.
 
 ## Changelog
+
+### 2.1.0 — Marketplace layer
+
+Non-breaking addition on top of 2.0.0:
+
+- **New tool:** `find_bookable_advisors` — search AdvisorFinder marketplace members (a few hundred advisors) by specialty, city, and/or state; returns their self-provided profile info plus the same regulatory facts (registration, four-state disclosure) as any other advisor.
+- **Marketplace enrichment.** `search_advisors`, `get_advisor`, and `check_advisor` now include a labeled AdvisorFinder marketplace listing block on results for advisors who are marketplace members — never an endorsement, never affecting ranking.
+- **`get_database_stats`** now reports a marketplace member count and snapshot date.
+- **New resource copy:** `advisorfinder://coverage-and-limitations` documents the marketplace layer.
 
 ### 2.0.0 — Breaking changes
 

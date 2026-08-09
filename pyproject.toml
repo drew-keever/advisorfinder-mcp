@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "advisorfinder-mcp"
-version = "2.0.0"
+version = "2.1.0"
 description = "MCP server and client for SEC-registered financial advisor data — search, profiles, disclosures status, firm fees. By AdvisorFinder."
 readme = "README.md"
 license = "MIT"

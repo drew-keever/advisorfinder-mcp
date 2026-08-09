@@ -31,13 +31,19 @@ No account, no API key, no authentication — it's free and read-only.
 3. **"Tell me about Edward Jones as a firm — how big are they and what do they charge?"** — firm profile with AUM band, headcount, client types, and fee structure as filed in their ADV Part 2A brochure.
 4. **"Find financial advisors in Austin, Texas."** — browse advisors by location, a starting point for choosing someone to interview.
 5. **"How current is your advisor data?"** — data vintages, coverage counts, and known limitations.
+6. **"Find a fee-only advisor near Austin I can actually book a call with"** — searches the AdvisorFinder marketplace for members you can view and contact directly, with the same regulatory facts as any other advisor.
 
 ## What's in the data
 
 - **213,000+ active investment adviser representatives** at SEC-registered firms, with employment history, exams, registered states, and self-reported designations
 - **15,000+ SEC-registered advisory firms** — size, client types, fee arrangements, ADV-filed fee structures, branch locations, prior names
 - **16,000+ state-registered advisory firms** (reduced profiles)
+- **A few hundred advisors** listed on the AdvisorFinder marketplace, searchable directly via `find_bookable_advisors`
 - Four-state disclosure status per advisor, derived from the SEC roster flag
+
+## AdvisorFinder marketplace
+
+Some advisors are listed on AdvisorFinder's marketplace. Their listings add self-provided profile information and a link to contact them. Being listed is a business relationship with AdvisorFinder — it is labeled on every result, never affects search ranking, and is not an endorsement. Regulatory data is shown identically for all advisors. AUM and client-count figures on marketplace listings are self-reported by the advisor, always labeled "as listed on their AdvisorFinder profile."
 
 ## Honest limitations
 
