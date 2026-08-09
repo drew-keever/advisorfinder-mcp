@@ -455,13 +455,16 @@ def find_bookable_advisors(
     bio, client description, quick facts, and credentials (case-insensitive
     substring). Returns, per member: their self-provided profile info (bio,
     credentials, pricing, minimum account size, education, and more), a link
-    to their full AdvisorFinder profile, AND the same regulatory facts
-    check_advisor reports (registration status, four-state disclosure) —
-    shown identically here as for any other advisor, never softened. AUM and
-    client-count figures are self-reported by the advisor, not regulatory
-    data, and are always labeled as such. Being listed here is a business
-    relationship with AdvisorFinder, not an endorsement, and never affects
-    how any advisor ranks in search_advisors/check_advisor.
+    to their full AdvisorFinder profile, AND regulatory facts for their CRD.
+    Members whose CRD is in our SEC dataset get the same registration status
+    and four-state disclosure status check_advisor reports — never softened.
+    Members whose CRD is NOT in our SEC dataset (typically state-registered
+    or BD-side advisors) get a labeled note saying so, with FINRA
+    BrokerCheck / SEC IAPD verify links — never presented as if clean. AUM
+    and client-count figures are self-reported by the advisor, not
+    regulatory data, and are always labeled as such. Being listed here is a
+    business relationship with AdvisorFinder, not an endorsement, and never
+    affects how any advisor ranks in search_advisors/check_advisor.
     """
     if db.marketplace_stats() is None:
         return format.envelope({
