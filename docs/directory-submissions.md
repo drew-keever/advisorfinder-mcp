@@ -25,8 +25,8 @@ Internal prep doc. Everything both reviews will ask for, pre-filled. Fields mark
 
 - Submitted from the claude.ai **submission portal in org admin settings; requires a Team or Enterprise organization**. **[DREW]** confirm the AdvisorFinder workspace plan.
 - Ownership: connector touches only advisorfinder.com infrastructure (mcp.advisorfinder.com), our own R2 data artifact, and republishes public SEC/FINRA data we ingest ourselves — no third-party API wrapping.
-- Example prompts (needs ≥3; use the 5 from the help page).
-- Confirm-before-submit checklist: every tool run by us against production ✓ (all six exercised in deployment gates); no auth flow to document; privacy policy URL live **[DREW]**.
+- Example prompts (needs ≥3; use the 6 from the help page).
+- Confirm-before-submit checklist: every tool run by us against production ✓ (all seven exercised in deployment gates); no auth flow to document; privacy policy URL live **[DREW]**.
 
 ## ChatGPT apps/plugin directory — specifics
 
