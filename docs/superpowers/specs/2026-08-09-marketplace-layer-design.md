@@ -47,8 +47,8 @@ marketplace_advisors table ──► baked into mcp_public.db by build_mcp_publi
 ## Sanitizer audit (three layers, build fails loudly on any violation)
 
 1. **Column whitelist**: output table's columns must EQUAL the publish list; forbidden name-patterns (`email`, `phone`, `cognito`, `calendly`, `paid`, `token`, `password`, `auth`, `stripe`, `zip`) can never appear.
-2. **Value-level PII scan** over every published text field (bio, prompts, quickFacts, clientDescription, …): email-regex, phone-regex, and long-numeric-ID patterns → violations named with row + field; Drew adjudicates (strip or per-instance allow).
-3. **Cross-dataset validity**: every published `crd` must exist in `ia_reps` (typo catch); every `profile_url` must have come from the sitemap fetch; row count ≤ sitemap profile count.
+2. **Value-level PII scan** — ADJUDICATED 2026-08-09 (Gate A2) field-aware policy: `bio` is EXEMPT (advisor-authored public marketing text, displayed verbatim on the public marketplace profile — 11 members deliberately list contact info there); URL-typed fields (advisorWebsiteURL, linkedInURL, twitterURL, bioVideoLink) exempt from the long-digit and calendly-substring rules (self-chosen public links; video IDs false-positive the digit rule) but still email-scanned; ALL other text fields (in_their_own_words, quickFacts, clientDescription, credentials, education, …) remain strictly scanned and build-fatal.
+3. **Cross-dataset validity**: `crd`s are cross-checked against `ia_reps`; ADJUDICATED 2026-08-09 (Gate A2): mismatches are NOT build-fatal — 132/294 real members are state-registered/BD-side and legitimately absent from the SEC roster. They ship, counted in the manifest (marketplace_crd_unmatched), and the server labels them: "Regulatory records for this advisor aren't in our SEC dataset (likely state-registered) — verify on FINRA BrokerCheck / SEC IAPD." They auto-upgrade to full joins when the state-IAR ingest lands. Every `profile_url` must still come from the sitemap fetch; zero-publishable-rows still build-fatal.
 
 ## Product surface (server changes)
 
