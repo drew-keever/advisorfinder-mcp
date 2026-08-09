@@ -47,6 +47,16 @@ Design notes (why the population looks the way it does):
   which contradicted the export script's own aggregate tally (hd=='N' counts
   as none_reported unconditionally); the coordinator's spec correction
   resolved that contradiction by keying strictly off has_disclosure.
+
+Task 3 (marketplace-layer) note: the optional marketplace_advisors overlay
+(built by build_mcp_public_db.py's --marketplace flag) is fed by a SEPARATE
+sibling generator, tests/fixtures/make_fixture_marketplace.py, not by this
+file -- see its docstring. Its three marketplace rows reference existing
+ind_source_id/crd values from THIS file's ia_reps population (1000002,
+1000003, 1000005), which is why no structural change was needed here: the
+marketplace crd cross-check (sanitize_marketplace.sanitize()'s known_crds
+set) reads src.ia_reps.ind_source_id from whatever source db this file
+builds, and 1000002/1000003/1000005 already exist in it.
 """
 import json
 import sqlite3

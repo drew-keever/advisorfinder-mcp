@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 2,
-  "generatedAt": "2026-08-06T06:31:08.559315+00:00",
+  "schemaVersion": 3,
+  "generatedAt": "2026-08-09T05:21:12.203264+00:00",
   "counts": {
     "firms": 3,
     "firms_state": 1,
@@ -13,7 +13,8 @@
     "firm_locations": 2,
     "firm_other_names": 2,
     "firm_content": 1,
-    "firm_part2a": 1
+    "firm_part2a": 1,
+    "marketplace_advisors": 2
   },
   "asOf": {
     "firms": "2026-05-01",
@@ -32,9 +33,10 @@
     "rawPart2aTextExcluded": true,
     "fourStateDisclosure": true,
     "neverExportAuditPassed": true,
-    "ftsBuilt": true
+    "ftsBuilt": true,
+    "marketplaceIncluded": true
   },
   "employmentParseSkips": 0,
-  "sha256": "7de80c833cbc6537b5666002cc55f920522d8d7ff6e3791f13724f62669d1379",
-  "sizeBytes": 184320
+  "sha256": "032fe5ce95735145cfea2d83de2af11a8e4d1d18c185f08a46c5709aa7425797",
+  "sizeBytes": 200704
 }

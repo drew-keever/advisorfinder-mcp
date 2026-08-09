@@ -337,6 +337,100 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
         return results[:limit]
 
 
+# ── marketplace (optional; present only when the export was built with
+#    --marketplace) ────────────────────────────────────────────────────────────
+
+def _marketplace_table_exists(conn: sqlite3.Connection) -> bool:
+    """marketplace_advisors is OPTIONAL-at-runtime (build_mcp_public_db.py only
+    creates it when invoked with --marketplace) — checked via sqlite_master
+    rather than try/except around the query itself, so a genuine SQL bug in
+    this module's own queries still surfaces as a real error instead of being
+    silently swallowed as 'table absent'."""
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'marketplace_advisors'"
+    ).fetchone() is not None
+
+
+def get_marketplace_by_crd(crd: str) -> sqlite3.Row | None:
+    """The marketplace_advisors row (self-reported AdvisorFinder profile data —
+    aum/clientNumber etc. are as listed on the advisor's own profile, not
+    regulatory data) for `crd`, or None if either the table is absent (no
+    --marketplace at build time) or no marketplace member has this crd (never
+    joined the marketplace, or filtered out by the sitemap-scoping gate in
+    sanitize_marketplace.sanitize())."""
+    with get_conn() as conn:
+        if not _marketplace_table_exists(conn):
+            return None
+        return conn.execute(
+            "SELECT * FROM marketplace_advisors WHERE crd = ?", (crd,)
+        ).fetchone()
+
+
+def search_marketplace(
+    specialty: str | None = None,
+    city: str | None = None,
+    state: str | None = None,
+    limit: int = 20,
+) -> list[sqlite3.Row]:
+    """Returns up to `limit` marketplace_advisors rows matching all supplied
+    filters (AND semantics). `specialty` is a case-insensitive substring LIKE
+    across bio/clientDescription/quickFacts/credentials (294 rows in
+    production — a plain LIKE scan is fine at this scale, no FTS needed).
+    `city`/`state` are exact NOCASE equality. Empty list (not an error) when
+    the table is absent."""
+    with get_conn() as conn:
+        if not _marketplace_table_exists(conn):
+            return []
+
+        where = ["1=1"]
+        params: list = []
+        if specialty:
+            like = f"%{specialty}%"
+            where.append(
+                "(bio LIKE ? OR clientDescription LIKE ? OR quickFacts LIKE ? OR credentials LIKE ?)"
+            )
+            params.extend([like, like, like, like])
+        if city:
+            where.append("city = ? COLLATE NOCASE")
+            params.append(city)
+        if state:
+            where.append("state = ? COLLATE NOCASE")
+            params.append(state)
+
+        # ORDER BY before LIMIT, same discipline as search_advisors/search_firms:
+        # without it, which rows a plain browse or a narrowly-matching filter
+        # returns is whatever order SQLite happens to walk the table in —
+        # unspecified, and free to reshuffle on any rebuild/VACUUM. At fixture
+        # scale (2 rows) that's invisible; at production scale (294 rows) it
+        # would make a `limit`-truncated result set silently non-deterministic.
+        sql = (
+            "SELECT * FROM marketplace_advisors WHERE " + " AND ".join(where)
+            + " ORDER BY displayName LIMIT ?"
+        )
+        params.append(limit)
+        return conn.execute(sql, params).fetchall()
+
+
+def marketplace_stats() -> dict | None:
+    """{"count": int, "snapshot_date": str} sourced from export_meta's
+    marketplace_count / marketplace_snapshot_date keys (written on every v3
+    build, unconditionally — "0"/None when --marketplace was omitted). Returns
+    None when marketplace_advisors itself is absent (the table-presence check,
+    not the count, is authoritative for 'was this a marketplace build at
+    all' — a build run WITH --marketplace against zero sitemap-matched
+    advisors would still have the table, just empty, and should report
+    count=0 rather than None)."""
+    with get_conn() as conn:
+        exists = _marketplace_table_exists(conn)
+    if not exists:
+        return None
+    meta = get_meta()
+    return {
+        "count": int(meta.get("marketplace_count") or 0),
+        "snapshot_date": meta.get("marketplace_snapshot_date"),
+    }
+
+
 def get_firm(crd: str) -> dict | None:
     """Full firm bundle for get_firm. None if `crd` is in neither `firms` nor
     `firms_state`. `firm` is None (with `state_firm` populated) for a
