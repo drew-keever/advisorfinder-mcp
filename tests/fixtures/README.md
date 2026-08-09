@@ -19,6 +19,18 @@ two `advisor-profile` `<loc>` entries (one short-format professionalId
 `qv3Y1g3y`, one UUID-format) plus a couple of non-advisor URLs (homepage,
 blog post) that must never be mistaken for advisor profiles.
 
+`mcp_public_no_marketplace.db` is a SECOND committed fixture: the same
+`make_fixture_source.py` source database run through the real
+`build_mcp_public_db.py` WITHOUT `--marketplace` — i.e. a genuine
+schema_version=3 export that simply never created `marketplace_advisors`.
+It exists so `tests/test_bootstrap_and_db.py::test_marketplace_functions_are_graceful_when_table_absent`
+can assert the graceful-absence contract (`get_marketplace_by_crd` → `None`,
+`search_marketplace` → `[]`, `marketplace_stats` → `None`) unconditionally —
+no dependency on the sibling firm-intelligence worktree, no skip, works in CI
+and on any machine. (A separate, clearly-skippable provenance test rebuilds
+an equivalent DB live via the real script, to prove this fixture's shape
+actually matches current script output — see that test's docstring.)
+
 ## Regenerate
 
 ```bash
@@ -44,12 +56,29 @@ cp /tmp/fixture_out/mcp_public.db tests/fixtures/mcp_public.db
 cp /tmp/fixture_out/manifest.json tests/fixtures/manifest.json
 ```
 
+### Regenerate mcp_public_no_marketplace.db (the no-`--marketplace` fixture)
+
+```bash
+# 1. Build the source DB (same generator, same source shape as above).
+.venv/bin/python tests/fixtures/make_fixture_source.py /tmp/fixture_source_nm.db
+
+# 2. Run the real export script WITHOUT --marketplace / --marketplace-sitemap.
+/Users/lv/projects/advisorfinder/firm-intelligence-worktrees/marketplace/.venv/bin/python \
+  /Users/lv/projects/advisorfinder/firm-intelligence-worktrees/marketplace/scripts/build_mcp_public_db.py \
+  --source /tmp/fixture_source_nm.db \
+  --out /tmp/fixture_out_nm
+
+# 3. Copy just the db -- nothing here reads its manifest.json.
+cp /tmp/fixture_out_nm/mcp_public.db tests/fixtures/mcp_public_no_marketplace.db
+```
+
 Omitting `--marketplace`/`--marketplace-sitemap` still produces a valid
 schema_version=3 DB — `marketplace_advisors` is OPTIONAL-at-runtime (see
 `db._marketplace_table_exists()`), so a v3 build without marketplace data is a
-legitimate shape, just not the one committed here. This is exactly what
-`tests/test_bootstrap_and_db.py::test_marketplace_functions_are_graceful_when_table_absent`
-builds on the fly in `tmp_path` to prove the graceful-absence contract.
+legitimate shape, just not the one committed as `mcp_public.db`. That's
+exactly the shape `mcp_public_no_marketplace.db` commits, and what the
+provenance test in `tests/test_bootstrap_and_db.py` rebuilds live in
+`tmp_path` to double-check against.
 
 ## Not byte-for-byte reproducible
 

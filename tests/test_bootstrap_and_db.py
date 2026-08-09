@@ -20,6 +20,16 @@ from advisorfinder_mcp import bootstrap, db
 FIXTURE_DB = Path(__file__).parent / "fixtures" / "mcp_public.db"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
+# Committed second fixture: schema_version=3, built by the SAME real
+# build_mcp_public_db.py script but WITHOUT --marketplace -- i.e. a genuine
+# v3 export that simply never had marketplace_advisors created. Regenerated
+# by the command documented in tests/fixtures/README.md. Unlike FIXTURE_DB,
+# this one is committed specifically so the graceful-absence contract below
+# is enforced unconditionally (no other-worktree dependency, no skip, works
+# in CI and on any machine) -- see the Important review finding this fixture
+# was added to close.
+NO_MARKETPLACE_FIXTURE_DB = Path(__file__).parent / "fixtures" / "mcp_public_no_marketplace.db"
+
 # The other repo's worktree that owns the REAL export scripts (Tasks 1-2 of the
 # marketplace-layer plan) -- see tests/fixtures/README.md for the full
 # regeneration commands. Only test_marketplace_functions_*_when_table_absent
@@ -262,13 +272,52 @@ def test_marketplace_stats_count_and_snapshot_date():
 
 # ── marketplace: graceful None/empty when marketplace_advisors is absent
 #    (a genuinely v2-shaped-in-substance v3 build -- schema_version=3 but the
-#    build ran WITHOUT --marketplace, so the table itself never exists) ──────
+#    build ran WITHOUT --marketplace, so the table itself never exists).
+#
+#    This is the load-bearing, UNCONDITIONAL test for that contract: it reads
+#    the committed tests/fixtures/mcp_public_no_marketplace.db fixture (built
+#    once by the real build_mcp_public_db.py, no --marketplace flag -- see
+#    tests/fixtures/README.md for the exact command) and runs with no path
+#    gate, no skip, on any machine including CI. See
+#    test_marketplace_functions_graceful_absence_provenance_via_real_build_script
+#    below for the separate (skippable) test that proves this fixture's
+#    shape by rebuilding an equivalent one live via the real script. ─────────
 
-def test_marketplace_functions_are_graceful_when_table_absent(tmp_path):
+def test_marketplace_functions_are_graceful_when_table_absent():
+    assert NO_MARKETPLACE_FIXTURE_DB.exists(), (
+        f"missing committed fixture {NO_MARKETPLACE_FIXTURE_DB} -- see "
+        "tests/fixtures/README.md for the regeneration command"
+    )
+
+    # db.set_db_path() clears the module's _meta_cache as a side effect (see
+    # db.py), so repointing here and restoring in `finally` can't leak stale
+    # export_meta into whichever test runs next -- same pattern
+    # test_set_db_path_clears_meta_cache above exercises directly.
+    original_path = db.DB_PATH
+    try:
+        db.set_db_path(NO_MARKETPLACE_FIXTURE_DB)
+        assert db.get_marketplace_by_crd("1000002") is None
+        assert db.search_marketplace(state="NY", limit=20) == []
+        assert db.marketplace_stats() is None
+    finally:
+        db.set_db_path(original_path)
+
+
+# ── marketplace: provenance test for the fixture above. Rebuilds an
+#    equivalent no---marketplace DB LIVE via the real script from the sibling
+#    firm-intelligence worktree, to prove the committed
+#    mcp_public_no_marketplace.db fixture's shape actually matches what that
+#    real script produces (not just a hand-maintained stand-in). This one MAY
+#    skip when the sibling worktree/venv is absent (e.g. after that worktree
+#    is merged and removed) -- that's fine here specifically, because the
+#    contract itself is already enforced unconditionally by the test above;
+#    this one only re-validates provenance, not the contract. ────────────────
+
+def test_marketplace_functions_graceful_absence_provenance_via_real_build_script(tmp_path):
     if not _OTHER_VENV_PYTHON.exists():
         pytest.skip(
             f"other worktree venv not found at {_OTHER_VENV_PYTHON} -- "
-            "cannot build a real no---marketplace fixture variant"
+            "cannot re-derive the no---marketplace fixture from the real build script"
         )
 
     source_db = tmp_path / "fixture_source.db"
