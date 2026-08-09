@@ -19,7 +19,7 @@ Internal prep doc. Everything both reviews will ask for, pre-filled. Fields mark
 
 ## Reviewer test instructions (both reviews)
 
-> No authentication or test account is needed — the server is public and read-only. Connect to `https://mcp.advisorfinder.com/mcp` (streamable HTTP). All six tools work anonymously. Suggested end-to-end flow: call `search_advisors` with name "Garcia" and state "FL"; take a returned CRD and call `get_advisor` then `check_advisor` with it; call `search_firms` with name "Edward Jones"; call `get_firm` with CRD 250; call `get_database_stats` with no arguments. Responses are JSON with `data_as_of`, verification links (SEC IAPD / FINRA BrokerCheck), and coverage caveats on every payload. The three resources (`advisorfinder://credentials-guide`, `data-sources`, `coverage-and-limitations`) are static reference text.
+> No authentication or test account is needed — the server is public and read-only. Connect to `https://mcp.advisorfinder.com/mcp` (streamable HTTP). All seven tools work anonymously. Suggested end-to-end flow: call `search_advisors` with name "Garcia" and state "FL"; take a returned CRD and call `get_advisor` then `check_advisor` with it; call `search_firms` with name "Edward Jones"; call `get_firm` with CRD 250; call `get_database_stats` with no arguments; call `find_bookable_advisors` with no arguments to browse AdvisorFinder marketplace members. Responses are JSON with `data_as_of`, verification links (SEC IAPD / FINRA BrokerCheck), and coverage caveats on every payload. The three resources (`advisorfinder://credentials-guide`, `data-sources`, `coverage-and-limitations`) are static reference text.
 
 ## Claude connectors directory — specifics
 
@@ -34,19 +34,20 @@ Submitted via OpenAI's plugin portal ("With MCP" path): production `/mcp` URL, d
 
 **Starter prompts:** use example prompts 1, 3, 4 from the help page.
 
-**Positive test cases (5 — each tool covered):**
+**Positive test cases (6 — each tool covered):**
 1. *"Is my financial advisor legitimate? His name is John Smith and he works at Edward Jones in Texas."* → calls `check_advisor` (name + firm + state); expected: ambiguous-match list of candidates with CRDs, or a single verdict with registration + disclosure status and BrokerCheck link.
 2. *"Look up the advisor with CRD 2827240."* → calls `get_advisor`; expected: full profile (employment history, exams, registered states, disclosure status).
 3. *"Tell me about Edward Jones as an advisory firm — size and fees."* → calls `search_firms` and/or `get_firm` (CRD 250); expected: AUM band `$25B+`, headcount, fee structure labeled "estimated from ADV Part 2A filing".
 4. *"Find financial advisors in Austin, Texas I could talk to."* → calls `search_advisors` with city/state only (browse mode); expected: list of advisors with firms and disclosure status.
 5. *"How fresh is your data and what does it cover?"* → calls `get_database_stats`; expected: counts, per-source vintages, coverage caveats.
+6. *"Find a fee-only advisor near Austin I can actually book a call with."* → calls `find_bookable_advisors`; expected: AdvisorFinder marketplace members with self-provided profile info, a profile link, and the same regulatory facts (registration, disclosure status) as any other advisor — labeled, never an endorsement.
 
 **Negative test cases (3 — when NOT to trigger):**
 1. *"What stocks should I buy this year?"* → must NOT call any tool: investment advice, out of scope; the model should answer (or decline) without invoking AdvisorFinder.
 2. *"Find me a good dentist in Chicago."* → must NOT call any tool: not a financial-advisor query despite the "find me a professional near me" shape.
 3. *"What were Apple's earnings last quarter?"* → must NOT call any tool: financial topic but not advisor/firm registration data.
 
-**Tool annotations:** all six tools are `readOnlyHint: true`, no destructive/write operations, no user data stored. (Already accurate in the server's tool definitions.)
+**Tool annotations:** all seven tools are `readOnlyHint: true`, no destructive/write operations, no user data stored. (Already accurate in the server's tool definitions.)
 
 **Screenshots:** only required for Apps-SDK widget apps; this is a tool-only MCP plugin — skip unless the portal demands them.
 

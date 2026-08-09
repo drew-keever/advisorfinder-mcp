@@ -38,7 +38,7 @@ No account, no API key, no authentication — it's free and read-only.
 - **213,000+ active investment adviser representatives** at SEC-registered firms, with employment history, exams, registered states, and self-reported designations
 - **15,000+ SEC-registered advisory firms** — size, client types, fee arrangements, ADV-filed fee structures, branch locations, prior names
 - **16,000+ state-registered advisory firms** (reduced profiles)
-- **A few hundred advisors** listed on the AdvisorFinder marketplace, searchable directly via `find_bookable_advisors`
+- **A few hundred of those advisors** are also listed on the AdvisorFinder marketplace, searchable directly via `find_bookable_advisors`
 - Four-state disclosure status per advisor, derived from the SEC roster flag
 
 ## AdvisorFinder marketplace
