@@ -250,8 +250,12 @@ def test_search_marketplace_specialty_is_case_insensitive_substring():
 
 
 def test_search_marketplace_no_filters_returns_all_members_up_to_limit():
+    # 3 members as of the Gate A2 (2026-08-09) fixture regen: 1000002/1000003
+    # (both cross-check against ia_reps) plus 1000010 ("Reggie State" — Gate
+    # A2 Ruling 1's crd-not-in-ia_reps case, which ships flagged rather than
+    # failing the build; see make_fixture_marketplace.py's docstring).
     rows = db.search_marketplace(limit=20)
-    assert {r["crd"] for r in rows} == {"1000002", "1000003"}
+    assert {r["crd"] for r in rows} == {"1000002", "1000003", "1000010"}
 
 
 def test_search_marketplace_limit_is_honored():
@@ -262,7 +266,8 @@ def test_search_marketplace_limit_is_honored():
 def test_marketplace_stats_count_and_snapshot_date():
     stats = db.marketplace_stats()
     assert stats is not None
-    assert stats["count"] == 2
+    # 3, not 2, as of the Gate A2 fixture regen (see comment above).
+    assert stats["count"] == 3
     # snapshot_date is derived from the fixture marketplace xlsx's mtime at
     # regeneration time (see tests/fixtures/README.md) -- not hardcoded here
     # since it legitimately shifts on every regen. date.fromisoformat() pins

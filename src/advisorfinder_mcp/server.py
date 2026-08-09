@@ -412,15 +412,21 @@ def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None =
 def _regulatory_join(crd: str) -> tuple[dict, dict]:
     """(registration, disclosure) for a marketplace member's CRD, using the
     exact same db/format helpers check_advisor's _check_verdict does —
-    registration.active + four-state disclosure. Marketplace members are
-    cross-checked against the SEC roster at export time (sanitize_marketplace
-    only keeps known_crds), so db.get_advisor(crd) should always resolve; the
-    None branch below is defensive, not an expected fixture/production path."""
+    registration.active + four-state disclosure.
+
+    ADJUDICATED 2026-08-09 (Gate A2): the None branch below is a REAL,
+    reachable path, not defensive dead code — 132/294 real marketplace members
+    are state-registered/BD-side advisors legitimately absent from the SEC
+    roster (ia_reps). sanitize_marketplace.py ships their row anyway
+    (crd_mismatches is reported but no longer build-fatal), so db.get_advisor(crd)
+    genuinely returns None for them. Returns a labeled fallback disclosure
+    block (format.marketplace_unmatched_crd_disclosure) instead of crashing or
+    silently reporting the generic 'unknown' four-state status."""
     bundle = db.get_advisor(crd)
     if bundle is None:
         return (
             {"active": None, "registered_states": []},
-            format.disclosure_status(None, None),
+            format.marketplace_unmatched_crd_disclosure(crd),
         )
     rep = bundle["rep"]
     iar = bundle["iar"]

@@ -43,7 +43,7 @@ No account, no API key, no authentication — it's free and read-only.
 
 ## AdvisorFinder marketplace
 
-Some advisors are listed on AdvisorFinder's marketplace. Their listings add self-provided profile information and a link to contact them. Being listed is a business relationship with AdvisorFinder — it is labeled on every result, never affects search ranking, and is not an endorsement. Regulatory data is shown identically for all advisors. AUM and client-count figures on marketplace listings are self-reported by the advisor, always labeled "as listed on their AdvisorFinder profile."
+Some advisors are listed on AdvisorFinder's marketplace. Their listings add self-provided profile information and a link to contact them. Being listed is a business relationship with AdvisorFinder — it is labeled on every result, never affects search ranking, and is not an endorsement. Regulatory data is shown identically for all advisors. AUM and client-count figures on marketplace listings are self-reported by the advisor, always labeled "as listed on their AdvisorFinder profile." Some marketplace members are state-registered or broker-dealer-side advisors whose records may not appear in our SEC-roster data — those results are clearly labeled, with FINRA BrokerCheck / SEC IAPD verify links included.
 
 ## Honest limitations
 

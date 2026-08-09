@@ -242,6 +242,37 @@ def marketplace_block(row: Any) -> dict:
     }
 
 
+# ── marketplace member with no regulatory-dataset match (Gate A2 Ruling 1) ───
+# ADJUDICATED 2026-08-09 (Gate A2): 132/294 real marketplace members are
+# state-registered/BD-side advisors whose CRDs legitimately never appear in
+# ia_reps (the SEC roster) -- sanitize_marketplace.py ships their row anyway
+# (crd_mismatches is reported but no longer build-fatal, see
+# scripts/sanitize_marketplace.py in the firm-intelligence repo). This is
+# therefore a REAL, reachable server path, not a defensive fallback for data
+# that "should never happen" -- exactly the note below, verbatim, plus the
+# same IAPD/BrokerCheck verify links check_advisor uses for any other CRD.
+_MARKETPLACE_CRD_UNMATCHED_NOTE = (
+    "Regulatory records for this advisor aren't in our SEC dataset (likely "
+    "state-registered) — verify on FINRA BrokerCheck / SEC IAPD."
+)
+
+
+def marketplace_unmatched_crd_disclosure(crd) -> dict:
+    """Labeled fallback disclosure block for a marketplace member whose crd
+    has no row in ia_reps (db.get_advisor(crd) returns None). Auto-upgrades to
+    an ordinary disclosure_status() join the moment the state-IAR ingest lands
+    and the CRD starts resolving -- this function is only ever reached for the
+    CRDs that don't resolve today."""
+    return {
+        "status": "not_in_regulatory_dataset",
+        "note": _MARKETPLACE_CRD_UNMATCHED_NOTE,
+        "verify": {
+            "iapd": iapd_individual_url(crd),
+            "brokercheck": brokercheck_individual_url(crd),
+        },
+    }
+
+
 # ── FTS query sanitizer ───────────────────────────────────────────────────────
 # Lives here (not db.py) because it's pure text processing with no DB
 # dependency; db.py's search queries import and call it.

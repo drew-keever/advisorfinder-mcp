@@ -100,7 +100,10 @@ Some advisors are listed on AdvisorFinder's marketplace. Their listings add
 self-provided profile information and a link to contact them. Being listed
 is a business relationship with AdvisorFinder — it is labeled on every
 result, never affects search ranking, and is not an endorsement. Regulatory
-data is shown identically for all advisors.
+data is shown identically for all advisors. Some marketplace members are
+state-registered or broker-dealer-side advisors whose records may not appear
+in our SEC-roster data — those results are clearly labeled, with FINRA
+BrokerCheck / SEC IAPD verify links included.
 
 ## Data vintage
 

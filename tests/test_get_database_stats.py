@@ -63,11 +63,13 @@ def test_coverage_block_present_with_state_firm_line_and_no_national_claim():
 
 
 # ── marketplace stats (Task 4): count + snapshot date, sourced from
-#    db.marketplace_stats() -- fixture has 2 committed marketplace members
-#    (see tests/fixtures/make_fixture_marketplace.py). ───────────────────────
+#    db.marketplace_stats() -- fixture has 3 committed marketplace members as
+#    of the Gate A2 (2026-08-09) fixture regen (see
+#    tests/fixtures/make_fixture_marketplace.py: the third, crd 1000010, is
+#    Ruling 1's crd-not-in-ia_reps case). ────────────────────────────────────
 
 def test_stats_reports_marketplace_count():
     result = server.get_database_stats()
     marketplace = result["marketplace"]
-    assert marketplace["member_count"] == 2
+    assert marketplace["member_count"] == 3
     assert marketplace["snapshot_date"]  # present, non-empty (mtime-derived, not pinned)

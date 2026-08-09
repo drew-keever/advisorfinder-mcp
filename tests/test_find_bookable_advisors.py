@@ -8,6 +8,13 @@ Fixture marketplace members (tests/fixtures/make_fixture_marketplace.py):
     make_fixture_source.py).
   crd 1000003 (MARY JONES) -- MINIMAL profile, city Boston/MA,
     disclosed_no_detail.
+  crd 1000010 (REGGIE STATE) -- Gate A2 (2026-08-09) Ruling 1's crd-not-in-
+    ia_reps case: a real, sitemap-listed marketplace member whose crd has NO
+    row in make_fixture_source.py's ia_reps table (state-registered/BD-side
+    advisor, legitimately absent from the SEC roster). sanitize_marketplace.py
+    ships this row anyway (crd_mismatches is reported but no longer build-
+    fatal) -- db.get_advisor("1000010") genuinely returns None, exercising
+    server._regulatory_join's real (not defensive) None branch.
 crd 1000001 (JANE SMITH) and crd 1000005 (PATRICK MCDONALD III) are NOT
 marketplace members (1000005 is excluded by the sitemap-scoping gate even
 though it was in the raw marketplace xlsx) -- used to prove ranking/absence
@@ -15,7 +22,7 @@ behavior elsewhere in this suite.
 """
 from pathlib import Path
 
-from advisorfinder_mcp import db, server
+from advisorfinder_mcp import db, format, server
 
 NO_MARKETPLACE_FIXTURE_DB = Path(__file__).parent / "fixtures" / "mcp_public_no_marketplace.db"
 
@@ -84,6 +91,53 @@ def test_find_bookable_minimal_profile_has_nulls_not_crash():
     assert minimal["bio"] is None
     assert minimal["self_reported"]["aum"] is None
     assert minimal["disclosure"]["status"] == "disclosed_no_detail"
+
+
+# ── Gate A2 (2026-08-09) Ruling 1: crd-not-in-ia_reps ships, labeled ─────────
+
+def test_find_bookable_unmatched_crd_gets_labeled_regulatory_block():
+    """crd 1000010 ("Reggie State") has no row in ia_reps -- a real,
+    reachable path per Gate A2 Ruling 1, not a crash or a silent 'unknown'.
+    The disclosure block must carry EXACTLY the adjudicated note plus the
+    standard IAPD/BrokerCheck verify links for that crd; registration must be
+    unknown (None/[]), never fabricated."""
+    result = server.find_bookable_advisors()
+    unmatched = next(r for r in result["results"] if r["crd"] == "1000010")
+
+    assert unmatched["disclosure"]["status"] == "not_in_regulatory_dataset"
+    # Two independent checks, deliberately: the first pins the wiring (server
+    # actually uses format's constant, not a hand-copied string that could
+    # drift); the second pins the COPY itself, whitespace-normalized so an
+    # incidental line-wrap on either side can't mask a real mismatch (same
+    # pattern as test_find_bookable_note_copy_is_exact below).
+    assert unmatched["disclosure"]["note"] == format._MARKETPLACE_CRD_UNMATCHED_NOTE
+    assert " ".join(unmatched["disclosure"]["note"].split()) == " ".join(
+        "Regulatory records for this advisor aren't in our SEC dataset "
+        "(likely state-registered) — verify on FINRA BrokerCheck / SEC IAPD.".split()
+    )
+    assert unmatched["disclosure"]["verify"] == {
+        "iapd": format.iapd_individual_url("1000010"),
+        "brokercheck": format.brokercheck_individual_url("1000010"),
+    }
+    assert unmatched["registration"]["active"] is None
+    assert unmatched["registration"]["registered_states"] == []
+    # Still a fully-formed marketplace listing -- no crash, envelope unchanged.
+    assert unmatched["name"] == "Reggie State"
+    assert unmatched["profile_url"] == (
+        "https://advisorfinder.com/app/advisor-profile/qv3Y4u6v/reggie-state"
+    )
+
+
+def test_find_bookable_matched_members_disclosure_unaffected_by_ruling_1():
+    """The crd-not-in-ia_reps labeled block is scoped to the member it
+    applies to -- matched members (1000002, 1000003) keep the ordinary
+    four-state disclosure_status() shape, never the fallback block."""
+    result = server.find_bookable_advisors()
+    by_crd = {r["crd"]: r for r in result["results"]}
+    for crd, expected_status in (("1000002", "disclosed_with_detail"), ("1000003", "disclosed_no_detail")):
+        assert by_crd[crd]["disclosure"]["status"] == expected_status
+        assert "verify" not in by_crd[crd]["disclosure"]
+        assert "note" not in by_crd[crd]["disclosure"]
 
 
 def test_find_bookable_note_copy_is_exact():

@@ -15,9 +15,11 @@ generators here:
   `marketplace_sitemap.xml` (proves the sitemap-scoping gate).
 
 `marketplace_sitemap.xml` (also committed here) is a small fixture sitemap:
-two `advisor-profile` `<loc>` entries (one short-format professionalId
-`qv3Y1g3y`, one UUID-format) plus a couple of non-advisor URLs (homepage,
-blog post) that must never be mistaken for advisor profiles.
+three `advisor-profile` `<loc>` entries (one short-format professionalId
+`qv3Y1g3y`, one UUID-format, and one more short-format professionalId
+`qv3Y4u6v` added for Gate A2's crd-not-in-ia_reps case) plus a couple of
+non-advisor URLs (homepage, blog post) that must never be mistaken for
+advisor profiles.
 
 `mcp_public_no_marketplace.db` is a SECOND committed fixture: the same
 `make_fixture_source.py` source database run through the real

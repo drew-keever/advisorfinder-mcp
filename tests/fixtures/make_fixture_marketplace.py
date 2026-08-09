@@ -30,8 +30,19 @@ Three rows, three cases:
     -- proves the sitemap-scoping gate (sanitize_marketplace.sanitize()) drops it
     from marketplace_advisors even though it's a well-formed, non-PII-violating,
     crd-valid row.
+  - "qv3Y4u6v" / crd 1000010 (REGGIE STATE): populated like a real row, IS in
+    tests/fixtures/marketplace_sitemap.xml, but crd 1000010 does NOT exist in
+    make_fixture_source.py's ia_reps table (which only populates 1000001-1000009).
+    Gate A2 (2026-08-09) Ruling 1: this is the "state-registered/BD-side advisor
+    whose CRD legitimately isn't in ia_reps" case -- the real
+    sanitize_marketplace.py no longer fails the build over a crd_mismatch, so
+    this row SHIPS in marketplace_advisors (flagged via
+    export_meta.marketplace_crd_unmatched / manifest.counts.marketplace_crd_unmatched,
+    not dropped). Proves server.py's find_bookable_advisors returns the labeled
+    "not in our SEC dataset" regulatory block for this member instead of crashing
+    or silently reporting the generic "unknown" four-state disclosure status.
 
-None of the three rows' whitelisted (published) field values contain anything
+None of the four rows' whitelisted (published) field values contain anything
 that would trip sanitize_marketplace's PII value-scan (email/phone/cognito/calendly
 patterns, 10+ consecutive digits) -- the never-export-only columns (email,
 phoneNumber, cognitoUsername, calendlyUrl) carry realistic-looking PII on purpose,
@@ -137,7 +148,29 @@ ROW_NOT_IN_SITEMAP = {
     "firstName": "Patrick", "lastName": "McDonald",
 }
 
-ROWS = [ROW_RICH, ROW_MINIMAL, ROW_NOT_IN_SITEMAP]
+# ── ROW 4: crd NOT in ia_reps (state-registered/BD-side, Gate A2 Ruling 1) ────
+ROW_CRD_UNMATCHED = {
+    "professionalId": "qv3Y4u6v", "crd": "1000010",
+    "displayName": "Reggie State", "companyName": "State Wealth Partners",
+    "jobTitle": "Investment Adviser Representative", "city": "Austin", "state": "TX",
+    "bio": "State-registered adviser serving Central Texas families.",
+    "credentials": "CFP",
+    "clientDescription": "Families and small-business owners in Central Texas.",
+    "quickFacts": "State-registered; fee-only; in-person meetings preferred",
+    "pricing": "", "pricingV2": "0.85% of AUM annually",
+    "minAccountSize": 50000, "yearsOfExperience": 9, "virtualMeetingsOffered": "No",
+    "allowedStates": "TX", "memberSince": "2023-11-01",
+    "advisorWebsiteURL": "https://statereggie.example.com",
+    "linkedInURL": "https://linkedin.com/in/reggiestate", "twitterURL": None,
+    "bioVideoLink": None, "education": "University of Texas at Austin",
+    "aum": 12_000_000, "clientNumber": 45,
+    "advisorPrompts": _prompts("I love helping local families plan for the future."),
+    "email": "reggie.state@example.com", "phoneNumber": "512-555-0177",
+    "cognitoUsername": "cognito|reggie123", "calendlyUrl": "https://calendly.com/reggiestate",
+    "firstName": "Reggie", "lastName": "State",
+}
+
+ROWS = [ROW_RICH, ROW_MINIMAL, ROW_NOT_IN_SITEMAP, ROW_CRD_UNMATCHED]
 
 
 def build_marketplace_xlsx(path) -> Path:

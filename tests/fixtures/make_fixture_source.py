@@ -51,12 +51,18 @@ Design notes (why the population looks the way it does):
 Task 3 (marketplace-layer) note: the optional marketplace_advisors overlay
 (built by build_mcp_public_db.py's --marketplace flag) is fed by a SEPARATE
 sibling generator, tests/fixtures/make_fixture_marketplace.py, not by this
-file -- see its docstring. Its three marketplace rows reference existing
-ind_source_id/crd values from THIS file's ia_reps population (1000002,
-1000003, 1000005), which is why no structural change was needed here: the
-marketplace crd cross-check (sanitize_marketplace.sanitize()'s known_crds
-set) reads src.ia_reps.ind_source_id from whatever source db this file
-builds, and 1000002/1000003/1000005 already exist in it.
+file -- see its docstring. Three of its four marketplace rows reference
+existing ind_source_id/crd values from THIS file's ia_reps population
+(1000002, 1000003, 1000005), which is why no structural change was needed
+here: the marketplace crd cross-check (sanitize_marketplace.sanitize()'s
+known_crds set) reads src.ia_reps.ind_source_id from whatever source db this
+file builds, and 1000002/1000003/1000005 already exist in it. The fourth
+marketplace row (crd 1000010, "Reggie State") is DELIBERATELY absent from
+ia_reps -- Gate A2 Ruling 1 (2026-08-09): 132/294 real marketplace members are
+state-registered/BD-side advisors whose CRDs legitimately never appear in the
+SEC roster, and sanitize_marketplace.py no longer fails the build over that
+mismatch (it ships the row, flagged). 1000010 is intentionally never inserted
+into ia_reps here so that fixture stays true to that real-world shape.
 """
 import json
 import sqlite3

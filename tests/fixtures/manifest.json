@@ -1,6 +1,6 @@
 {
   "schemaVersion": 3,
-  "generatedAt": "2026-08-09T05:21:12.203264+00:00",
+  "generatedAt": "2026-08-09T06:28:40.220808+00:00",
   "counts": {
     "firms": 3,
     "firms_state": 1,
@@ -14,7 +14,8 @@
     "firm_other_names": 2,
     "firm_content": 1,
     "firm_part2a": 1,
-    "marketplace_advisors": 2
+    "marketplace_advisors": 3,
+    "marketplace_crd_unmatched": 1
   },
   "asOf": {
     "firms": "2026-05-01",
@@ -37,6 +38,6 @@
     "marketplaceIncluded": true
   },
   "employmentParseSkips": 0,
-  "sha256": "032fe5ce95735145cfea2d83de2af11a8e4d1d18c185f08a46c5709aa7425797",
+  "sha256": "a49c5b09dd24c67b932bfb19b585e69e91f06eaa170f746c4a3572cc935dbe6e",
   "sizeBytes": 200704
 }

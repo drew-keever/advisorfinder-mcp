@@ -115,7 +115,7 @@ No CRD numbers needed — search by name, firm, city, or state.
 
 **No numeric risk score.** This server intentionally does not compress disclosure/registration facts into a single risk number — it surfaces the underlying facts so you can judge for yourself.
 
-**AdvisorFinder marketplace.** Some advisors are listed on AdvisorFinder's marketplace (`find_bookable_advisors`, and enrichment on other tools' results). Their listings add self-provided profile information and a link to contact them. Being listed is a business relationship with AdvisorFinder — it is labeled on every result, never affects search ranking, and is not an endorsement. Regulatory data is shown identically for all advisors. AUM and client-count figures in marketplace listings are self-reported, always labeled "as listed on their AdvisorFinder profile."
+**AdvisorFinder marketplace.** Some advisors are listed on AdvisorFinder's marketplace (`find_bookable_advisors`, and enrichment on other tools' results). Their listings add self-provided profile information and a link to contact them. Being listed is a business relationship with AdvisorFinder — it is labeled on every result, never affects search ranking, and is not an endorsement. Regulatory data is shown identically for all advisors. AUM and client-count figures in marketplace listings are self-reported, always labeled "as listed on their AdvisorFinder profile." Some marketplace members are state-registered or broker-dealer-side advisors whose records may not appear in our SEC-roster data — those results are clearly labeled, with FINRA BrokerCheck / SEC IAPD verify links included.
 
 ## Disclaimer
 
