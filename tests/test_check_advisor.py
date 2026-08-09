@@ -5,7 +5,12 @@ from advisorfinder_mcp import server
 
 def _envelope_keys_present(result):
     assert "data_as_of" in result
-    assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
+    # Task 4 (marketplace-layer): the link deep-links to a marketplace
+    # member's own profile instead of the generic homepage -- both are valid
+    # advisorfinder.com URLs. See test_check_advisor_member_has_listing_block_
+    # and_deep_link / test_check_advisor_nonmember_has_no_listing_block below
+    # for the exact member-vs-nonmember pin.
+    assert result["advisorfinder"]["link"].startswith("https://advisorfinder.com")
     assert "verify" in result
     assert "coverage_caveats" in result
 
@@ -100,3 +105,22 @@ def test_check_unsanitizable_firm_returns_error_not_browse():
     _envelope_keys_present(result)
     assert "error" in result
     assert result.get("ambiguous") is not True
+
+
+# ── marketplace enrichment (Task 4): check_advisor also joins marketplace
+#    membership -- envelope link deep-links to the member's own profile, and a
+#    labeled listing block is present, same shape as get_advisor's. ─────────
+
+def test_check_advisor_member_has_listing_block_and_deep_link():
+    result = server.check_advisor(name_or_crd="1000002")
+    listing = result["advisorfinder_listing"]
+    assert listing["note"] == (
+        "This advisor is listed on AdvisorFinder — view their full profile and contact them."
+    )
+    assert result["advisorfinder"]["link"] == listing["profile_url"]
+
+
+def test_check_advisor_nonmember_has_no_listing_block():
+    result = server.check_advisor(name_or_crd="1000001")
+    assert "advisorfinder_listing" not in result
+    assert result["advisorfinder"]["link"] == "https://advisorfinder.com"

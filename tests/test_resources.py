@@ -50,3 +50,18 @@ def test_coverage_and_limitations_mentions_scope_and_self_reported():
     assert "state-registered" in lower
     assert "self-reported" in lower
     assert "2026-05-20" in text or "2026-05-01" in text
+
+
+def test_coverage_resource_discloses_marketplace():
+    # This paragraph is a VERBATIM requirement (task-4-brief.md) -- normalize
+    # whitespace so the source is free to wrap it across lines (same style as
+    # every other paragraph in this resource) while the test still enforces
+    # the exact copy, word-for-word, rather than loosely-matched fragments.
+    text = " ".join(resources.coverage_and_limitations().split())
+    assert (
+        "Some advisors are listed on AdvisorFinder's marketplace. Their listings "
+        "add self-provided profile information and a link to contact them. Being "
+        "listed is a business relationship with AdvisorFinder — it is labeled on "
+        "every result, never affects search ranking, and is not an endorsement. "
+        "Regulatory data is shown identically for all advisors."
+    ) in text

@@ -174,3 +174,27 @@ def test_search_curly_apostrophe_matches_ohearn():
     result = server.search_advisors(name="O’Hearn")
     crds = {r["crd"] for r in result["results"]}
     assert "1000004" in crds
+
+
+# ── marketplace enrichment (Task 4): a labeled listing block is joined per
+#    result row (one db.get_marketplace_by_crd lookup per returned row, AFTER
+#    ranking/limit) -- but must never change WHICH rows match or their ORDER.
+#    1000001 (JANE SMITH, non-member) and 1000002 (JOHN Q SMITH, marketplace
+#    member) share last name SMITH and both work at ALPHA WEALTH LLC/NEW
+#    YORK/NY -- searching "smith" hits both, ordered by last_name/first_name
+#    (JANE before JOHN) same as before enrichment existed. ───────────────────
+
+def test_search_advisors_ranking_unchanged_by_membership():
+    result = server.search_advisors(name="smith")
+    crds = [r["crd"] for r in result["results"]]
+    assert crds == ["1000001", "1000002"]  # pre-existing relevance order, pinned
+
+
+def test_search_advisors_member_row_has_listing_block_nonmember_does_not():
+    result = server.search_advisors(name="smith")
+    by_crd = {r["crd"]: r for r in result["results"]}
+    assert "advisorfinder_listing" not in by_crd["1000001"]
+    listing = by_crd["1000002"]["advisorfinder_listing"]
+    assert listing["note"] == (
+        "This advisor is listed on AdvisorFinder — view their full profile and contact them."
+    )

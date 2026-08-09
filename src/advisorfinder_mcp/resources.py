@@ -94,6 +94,14 @@ def coverage_and_limitations() -> str:
   facts (registration status, disclosure status) so you can judge for
   yourself; we do not compress them into a single number.
 
+## AdvisorFinder marketplace
+
+Some advisors are listed on AdvisorFinder's marketplace. Their listings add
+self-provided profile information and a link to contact them. Being listed
+is a business relationship with AdvisorFinder — it is labeled on every
+result, never affects search ranking, and is not an endorsement. Regulatory
+data is shown identically for all advisors.
+
 ## Data vintage
 
 - Advisor (IAR) data: {meta.get('ia_reps_as_of')}

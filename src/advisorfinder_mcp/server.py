@@ -113,6 +113,21 @@ _FEE_LABELS = {
 }
 
 
+def _marketplace_listing_for(crd: str):
+    """(marketplace_row, listing_dict) for `crd` -- listing_dict is
+    format.marketplace_block(marketplace_row), or None when `crd` isn't a
+    marketplace member (or this deployment has no marketplace data at all;
+    db.get_marketplace_by_crd already returns None gracefully in that case).
+    Shared by get_advisor/check_advisor/search_advisors's per-result
+    enrichment (Task 4, marketplace-layer) -- one lookup per advisor CRD,
+    called only on already-selected rows (post-ranking/post-limit), never
+    folded into a search query's WHERE clause."""
+    marketplace_row = db.get_marketplace_by_crd(crd)
+    if marketplace_row is None:
+        return None, None
+    return marketplace_row, format.marketplace_block(marketplace_row)
+
+
 def _json_list(raw) -> list:
     if not raw:
         return []
@@ -173,13 +188,20 @@ def search_advisors(
             for f in r["firms"]
         ]
         disclosure = format.disclosure_status(r["has_disclosure"], r["iar_row"])
-        results.append({
+        entry = {
             "crd": r["ind_source_id"],
             "name": format.title_case_name(full_name),
             "firms": firms_out,
             "disclosure": disclosure["status"],
             "iapd_link": format.iapd_individual_url(r["ind_source_id"]),
-        })
+        }
+        # Marketplace enrichment (Task 4): one lookup per already-ranked,
+        # already-limited row -- never inside db.search_advisors()'s query,
+        # so it can't change which rows match or their order.
+        _, listing = _marketplace_listing_for(r["ind_source_id"])
+        if listing is not None:
+            entry["advisorfinder_listing"] = listing
+        results.append(entry)
 
     payload = {"result_count": len(results), "results": results}
     if not results:
@@ -273,7 +295,21 @@ def get_advisor(crd: str) -> dict:
         "years_in_industry": years_in_industry,
         "disclosure": disclosure,
     }
-    return format.envelope(payload, caveats=caveats, verify=_individual_verify_links(crd))
+
+    # Marketplace enrichment (Task 4): a labeled listing block, present only
+    # for advisors who are also AdvisorFinder marketplace members. The
+    # envelope's own advisorfinder.link deep-links to that member's profile
+    # instead of the generic homepage.
+    marketplace_row, listing = _marketplace_listing_for(crd)
+    if listing is not None:
+        payload["advisorfinder_listing"] = listing
+
+    return format.envelope(
+        payload,
+        caveats=caveats,
+        verify=_individual_verify_links(crd),
+        marketplace_row=marketplace_row,
+    )
 
 
 def _check_verdict(crd: str, bundle: dict) -> dict:
@@ -296,7 +332,18 @@ def _check_verdict(crd: str, bundle: dict) -> dict:
         },
         "disclosure": disclosure,
     }
-    return format.envelope(payload, verify=_individual_verify_links(crd))
+
+    # Marketplace enrichment (Task 4) -- same labeled listing block/deep-link
+    # behavior as get_advisor, see _marketplace_listing_for()'s docstring.
+    marketplace_row, listing = _marketplace_listing_for(crd)
+    if listing is not None:
+        payload["advisorfinder_listing"] = listing
+
+    return format.envelope(
+        payload,
+        verify=_individual_verify_links(crd),
+        marketplace_row=marketplace_row,
+    )
 
 
 @mcp.tool
@@ -360,6 +407,115 @@ def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None =
     crd = rows[0]["ind_source_id"]
     bundle = db.get_advisor(crd)
     return _check_verdict(crd, bundle)
+
+
+def _regulatory_join(crd: str) -> tuple[dict, dict]:
+    """(registration, disclosure) for a marketplace member's CRD, using the
+    exact same db/format helpers check_advisor's _check_verdict does —
+    registration.active + four-state disclosure. Marketplace members are
+    cross-checked against the SEC roster at export time (sanitize_marketplace
+    only keeps known_crds), so db.get_advisor(crd) should always resolve; the
+    None branch below is defensive, not an expected fixture/production path."""
+    bundle = db.get_advisor(crd)
+    if bundle is None:
+        return (
+            {"active": None, "registered_states": []},
+            format.disclosure_status(None, None),
+        )
+    rep = bundle["rep"]
+    iar = bundle["iar"]
+    registration = {
+        "active": rep["ia_scope"] == "Active",
+        "registered_states": _split_states(iar["registered_states"]) if iar else [],
+    }
+    disclosure = format.disclosure_status(rep["has_disclosure"], iar)
+    return registration, disclosure
+
+
+@mcp.tool
+def find_bookable_advisors(
+    specialty: str | None = None,
+    city: str | None = None,
+    state: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Search advisors listed on AdvisorFinder's marketplace — professionals
+    with public profiles you can view and contact directly. This searches
+    only AdvisorFinder members (a few hundred advisors), not the full
+    SEC roster; use search_advisors for the full roster.
+
+    All filters are optional — browsing with none of them is fine, since this
+    tool's scope is already narrow. `specialty` matches against the advisor's
+    bio, client description, quick facts, and credentials (case-insensitive
+    substring). Returns, per member: their self-provided profile info (bio,
+    credentials, pricing, minimum account size, education, and more), a link
+    to their full AdvisorFinder profile, AND the same regulatory facts
+    check_advisor reports (registration status, four-state disclosure) —
+    shown identically here as for any other advisor, never softened. AUM and
+    client-count figures are self-reported by the advisor, not regulatory
+    data, and are always labeled as such. Being listed here is a business
+    relationship with AdvisorFinder, not an endorsement, and never affects
+    how any advisor ranks in search_advisors/check_advisor.
+    """
+    if db.marketplace_stats() is None:
+        return format.envelope({
+            "available": False,
+            "message": "Marketplace data not available in this deployment.",
+            "result_count": 0,
+            "results": [],
+        })
+
+    clamped_limit = max(1, min(limit, 50))
+    rows = db.search_marketplace(specialty=specialty, city=city, state=state, limit=clamped_limit)
+
+    results = []
+    for row in rows:
+        crd = row["crd"]
+        # Regulatory join happens AFTER db.search_marketplace()'s own
+        # ranking/limit — one db.get_advisor() per already-selected row,
+        # never folded into that query, same discipline as the marketplace
+        # enrichment in search_advisors/get_advisor/check_advisor above.
+        registration, disclosure = _regulatory_join(crd)
+        entry = {
+            "crd": crd,
+            "name": row["displayName"],
+            "company": row["companyName"],
+            "city": row["city"],
+            "state": row["state"],
+            "bio": row["bio"],
+            "credentials": row["credentials"],
+            "client_description": row["clientDescription"],
+            "quick_facts": row["quickFacts"],
+            "min_account_size": row["minAccountSize"],
+            "years_of_experience": row["yearsOfExperience"],
+            "virtual_meetings_offered": row["virtualMeetingsOffered"],
+            "allowed_states": _split_states(row["allowedStates"]),
+            "member_since": row["memberSince"],
+            "website": row["advisorWebsiteURL"],
+            "linkedin": row["linkedInURL"],
+            "twitter": row["twitterURL"],
+            "bio_video": row["bioVideoLink"],
+            "education": row["education"],
+            "self_reported": {
+                "aum": row["aum"],
+                "client_number": row["clientNumber"],
+                "label": format.SELF_REPORTED_LABEL,
+            },
+            "in_their_own_words": _json_list(row["in_their_own_words"]),
+            "registration": registration,
+            "disclosure": disclosure,
+            **format.marketplace_block(row),  # profile_url, job_title, pricing, note
+        }
+        results.append(entry)
+
+    payload = {"result_count": len(results), "results": results}
+    if not results:
+        payload["not_found_guidance"] = (
+            "No AdvisorFinder members matched your search. Try a different "
+            "specialty, city, or state — or use search_advisors for the "
+            "full SEC roster (not marketplace-only)."
+        )
+    return format.envelope(payload)
 
 
 @mcp.tool
@@ -553,6 +709,16 @@ def get_database_stats() -> dict:
     state_firms_count = int(meta.get("state_firms_count", 0))
     state_firms_with_reps = int(meta.get("state_firms_with_reps", 0))
 
+    # Marketplace count + snapshot date (Task 4, marketplace-layer): None
+    # from db.marketplace_stats() means marketplace_advisors is absent
+    # entirely (a v3 build without --marketplace) -- distinct from a real
+    # build with zero sitemap-matched members, which reports member_count=0.
+    marketplace_stats = db.marketplace_stats()
+    marketplace = {
+        "member_count": marketplace_stats["count"] if marketplace_stats else 0,
+        "snapshot_date": marketplace_stats["snapshot_date"] if marketplace_stats else None,
+    }
+
     payload = {
         "firms_count": int(meta.get("firms_count", 0)),
         "state_firms_count": state_firms_count,
@@ -563,6 +729,7 @@ def get_database_stats() -> dict:
             "individuals_bulk_as_of": meta.get("individuals_as_of"),
         },
         "disclosure_tally": tally,
+        "marketplace": marketplace,
         "coverage": {
             "state_firms_with_advisor_rosters": f"{state_firms_with_reps}/{state_firms_count}",
             "note": (

@@ -3,7 +3,12 @@ from advisorfinder_mcp import server
 
 def _envelope_keys_present(result):
     assert "data_as_of" in result
-    assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
+    # Task 4 (marketplace-layer): the link deep-links to a marketplace
+    # member's own profile instead of the generic homepage -- both are valid
+    # advisorfinder.com URLs. See test_get_advisor_member_has_listing_block /
+    # test_get_advisor_nonmember_has_no_listing_block below for the exact
+    # member-vs-nonmember pin.
+    assert result["advisorfinder"]["link"].startswith("https://advisorfinder.com")
     assert "verify" in result
     assert "coverage_caveats" in result
 
@@ -107,3 +112,28 @@ def test_advisor_with_no_designations_or_content_still_works():
     assert result["found"] is True
     assert result["designations"] == []
     assert result["bio"] is None
+
+
+# ── marketplace enrichment (Task 4) -- labeled listing block for members,
+#    absent entirely for non-members. Fixture member: crd 1000002 (see
+#    tests/fixtures/make_fixture_marketplace.py). Non-member: crd 1000001
+#    (JANE SMITH never appears in the fixture marketplace xlsx). ────────────
+
+def test_get_advisor_member_has_listing_block():
+    result = server.get_advisor(crd="1000002")
+    listing = result["advisorfinder_listing"]
+    assert listing["profile_url"] == "https://advisorfinder.com/app/advisor-profile/qv3Y1g3y/john-q-smith"
+    assert listing["job_title"] == "Senior Financial Advisor"
+    assert listing["pricing"] == "$3,000/yr flat planning fee, or $250/hr for one-off consultations"
+    assert listing["note"] == (
+        "This advisor is listed on AdvisorFinder — view their full profile and contact them."
+    )
+    # the envelope's own advisorfinder link should deep-link to the member's
+    # own profile rather than the generic homepage.
+    assert result["advisorfinder"]["link"] == listing["profile_url"]
+
+
+def test_get_advisor_nonmember_has_no_listing_block():
+    result = server.get_advisor(crd="1000001")
+    assert "advisorfinder_listing" not in result
+    assert result["advisorfinder"]["link"] == "https://advisorfinder.com"

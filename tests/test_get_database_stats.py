@@ -60,3 +60,14 @@ def test_coverage_block_present_with_state_firm_line_and_no_national_claim():
     note = coverage["note"].lower()
     assert "state-registered" in note
     assert "empty roster does not mean" in note
+
+
+# ── marketplace stats (Task 4): count + snapshot date, sourced from
+#    db.marketplace_stats() -- fixture has 2 committed marketplace members
+#    (see tests/fixtures/make_fixture_marketplace.py). ───────────────────────
+
+def test_stats_reports_marketplace_count():
+    result = server.get_database_stats()
+    marketplace = result["marketplace"]
+    assert marketplace["member_count"] == 2
+    assert marketplace["snapshot_date"]  # present, non-empty (mtime-derived, not pinned)

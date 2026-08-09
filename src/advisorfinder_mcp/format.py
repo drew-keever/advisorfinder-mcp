@@ -16,6 +16,16 @@ def advisorfinder_url() -> str:
     return "https://advisorfinder.com"
 
 
+def advisorfinder_profile_url(row_or_none: Any) -> str:
+    """The deep link envelope() uses for its top-level advisorfinder.link:
+    a marketplace member's own AdvisorFinder profile URL when `row_or_none`
+    is a marketplace_advisors row (or any row-like object with a truthy
+    `profile_url` column/key), else the generic advisorfinder.com homepage.
+    Works with dict, sqlite3.Row, or None (via _row_value, defined below)."""
+    url = _row_value(row_or_none, "profile_url")
+    return url if url else advisorfinder_url()
+
+
 # ── name title-casing ─────────────────────────────────────────────────────────
 # Copied from firm-intelligence scripts/build_public_export.py (lines ~54-75)
 # — keep in sync. Handles O'Hearn/McDonald-style prefixes, hyphenated names, and
@@ -204,6 +214,34 @@ def fee_block(part2a_row: Any) -> dict | None:
     return block
 
 
+# ── marketplace listing block (labeled enrichment, never an endorsement) ─────
+# The single fixed disclosure note required verbatim by task-4-brief.md /
+# global-constraints.md -- every marketplace-member result gets exactly this
+# wording, never "endorsed"/"recommended by AdvisorFinder"/"vetted by
+# AdvisorFinder" (test-enforced: tests/test_no_endorsement_wording.py).
+_MARKETPLACE_NOTE = "This advisor is listed on AdvisorFinder — view their full profile and contact them."
+
+# The fixed label for self-reported financials (aum/clientNumber) sourced from
+# a marketplace_advisors row -- these are NOT regulatory AUM figures, they're
+# whatever the advisor typed into their own AdvisorFinder profile.
+SELF_REPORTED_LABEL = "as listed on their AdvisorFinder profile"
+
+
+def marketplace_block(row: Any) -> dict:
+    """The labeled marketplace-listing block attached to any tool result for
+    a marketplace member: deep link, job title, pricing, and the fixed
+    disclosure note above. `row` is a marketplace_advisors row (sqlite3.Row
+    or dict) as returned by db.get_marketplace_by_crd()/db.search_marketplace().
+    Never render this data without the note -- that's what keeps a business
+    listing from reading as an endorsement."""
+    return {
+        "profile_url": _row_value(row, "profile_url"),
+        "job_title": _row_value(row, "jobTitle"),
+        "pricing": _row_value(row, "pricing"),
+        "note": _MARKETPLACE_NOTE,
+    }
+
+
 # ── FTS query sanitizer ───────────────────────────────────────────────────────
 # Lives here (not db.py) because it's pure text processing with no DB
 # dependency; db.py's search queries import and call it.
@@ -281,10 +319,25 @@ def years_since(raw: str | None) -> int | None:
 
 # ── envelope ──────────────────────────────────────────────────────────────────
 
-def envelope(payload: dict, *, caveats: list[str] | None = None, verify: dict | None = None) -> dict:
+def envelope(
+    payload: dict,
+    *,
+    caveats: list[str] | None = None,
+    verify: dict | None = None,
+    marketplace_row: Any = None,
+) -> dict:
     """Wraps every tool's return value with the shared honesty scaffolding:
     data vintage, the advisorfinder.com link-out, verification links, and any
-    coverage caveats the caller collected while building the response."""
+    coverage caveats the caller collected while building the response.
+
+    `marketplace_row` (Task 4, marketplace-layer): pass the caller's
+    marketplace_advisors row when the tool's subject is a single advisor
+    who's also a marketplace member (get_advisor/check_advisor) -- the
+    top-level advisorfinder.link then deep-links to that member's own
+    profile via advisorfinder_profile_url() instead of the generic
+    homepage. Left as None (the default) for list-shaped/multi-advisor tools
+    (search_advisors, find_bookable_advisors, get_database_stats, ...),
+    where a single per-response link to one advisor wouldn't make sense."""
     from . import db  # local import: db.py never imports format.py, so this
     # is a one-directional dependency, not a cycle — deferred only to keep
     # format.py importable in isolation (e.g. before a DB path is set).
@@ -298,8 +351,8 @@ def envelope(payload: dict, *, caveats: list[str] | None = None, verify: dict | 
         **payload,
         "data_as_of": data_as_of,
         "advisorfinder": {
-            "link": advisorfinder_url(),
-            "note": "Find and compare vetted financial advisors on AdvisorFinder.",
+            "link": advisorfinder_profile_url(marketplace_row),
+            "note": "Compare financial advisors on AdvisorFinder.",
         },
         "verify": verify or {},
         "coverage_caveats": caveats or [],

@@ -32,10 +32,12 @@ def test_resources_registered_on_real_mcp_instance():
     }
 
 
-def test_all_six_tools_registered():
+def test_all_seven_tools_registered():
+    # Task 4 (marketplace-layer) adds find_bookable_advisors.
     tools = asyncio.run(server.mcp.list_tools())
     names = {t.name for t in tools}
     assert names == {
         "search_advisors", "get_advisor", "check_advisor",
         "search_firms", "get_firm", "get_database_stats",
+        "find_bookable_advisors",
     }
