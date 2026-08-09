@@ -32,15 +32,15 @@ marketplace_advisors table ──► baked into mcp_public.db by build_mcp_publi
 
 - Sheet `Sheet2`: 358 rows × 56 columns; `professionalId` unique; `crd` 100% filled; `appStatus` all "verified".
 - Sitemap: 294 advisor-profile URLs, **two ID formats** (short e.g. `qv3Y1g3y`, and UUID) — URLs must come from the sitemap, never assembled. All 294 sitemap IDs join `professionalId` exactly; 64 export rows have no public profile → excluded.
-- `advisorPrompts`: DynamoDB-JSON `[{"M":{"response":{"S":"…"},"promptId":{"N":"0"}}}]`, filled 128/358. **[DREW] supply promptId → question-text mapping** so we publish Q&A pairs; sanitizer parses the DynamoDB shape.
+- `advisorPrompts`: DynamoDB-JSON `[{"M":{"response":{"S":"…"},"promptId":{"N":"0"}}}]`, filled 128/358. RESOLVED: promptId→question mapping is not recoverable — publish **answers only**, framed as `in_their_own_words: [..]` (list of response strings). The framing makes standalone answers read naturally; promptId is dropped.
 - No specialties column in the export (marketplace-card specialties live elsewhere) — accepted; `find_bookable_advisors` specialty filtering searches bio/clientDescription/quickFacts text instead.
 
 ## Column whitelist (marketplace_advisors)
 
-**Publish:** professionalId, crd, displayName, companyName, jobTitle, city, state, bio, credentials, clientDescription, quickFacts, pricingV2 (fallback pricing), minAccountSize, yearsOfExperience, virtualMeetingsOffered, allowedStates, memberSince, advisorWebsiteURL, linkedInURL, profile_url (from sitemap), prompts (parsed Q&A JSON, pending mapping).
+**Publish:** professionalId, crd, displayName, companyName, jobTitle, city, state, bio, credentials, clientDescription, quickFacts, pricingV2 (fallback pricing), minAccountSize, yearsOfExperience, virtualMeetingsOffered, allowedStates, memberSince, advisorWebsiteURL, linkedInURL, profile_url (from sitemap), in_their_own_words (parsed advisorPrompts responses), aum, clientNumber, education, twitterURL, bioVideoLink (all five RESOLVED 2026-08-09: confirmed displayed publicly on profile pages; aum/clientNumber labeled 'as listed on their AdvisorFinder profile' — self-reported, distinct from the regulatory banding rules).
 
-**Never-export (audit-enforced, fail loudly):** email, phoneNumber, cognitoUsername, advisorELID, adtrax*, calendlyUrl, calendlyUser, paidAdvisor, profileCompletenessScore, accountEnabled, appStatus, agreedToBetaAgreement, zipCode, supplementalZipCodes, disclosureText, rsnipDisclosure, finraUrl, secUrl, jobHistory, createdDate, lastUpdatedDate, education*, entityType*, hasInsuranceLicense*, aum*, averageAccountSize*, clientNumber*, bioVideoLink*, twitterURL*
-  (* = deferred, not condemned: revisit when Drew confirms they're displayed publicly on profile pages.)
+**Never-export (audit-enforced, fail loudly):** email, phoneNumber, cognitoUsername, advisorELID, adtrax*, calendlyUrl, calendlyUser, paidAdvisor, profileCompletenessScore, accountEnabled, appStatus, agreedToBetaAgreement, zipCode, supplementalZipCodes, disclosureText, rsnipDisclosure, finraUrl, secUrl, jobHistory, createdDate, lastUpdatedDate, entityType*, hasInsuranceLicense*, averageAccountSize*
+  (* = deferred: not confirmed as publicly displayed.)
 
 **Booking:** the profile URL IS the booking link (booking flow lives on the profile page; raw calendly links bypass the funnel — excluded).
 
@@ -66,7 +66,5 @@ marketplace_advisors table ──► baked into mcp_public.db by build_mcp_publi
 
 ## Open items
 
-- **[DREW]** promptId → question mapping.
-- **[DREW]** confirm which deferred fields (aum, clientNumber, education, twitter, bioVideoLink, hasInsuranceLicense) are displayed publicly on profile pages → move to publish list.
 - Refresh cadence: export drop is manual (monthly / 2× quarter); document the drop path + `refresh_mcp_db.sh` picks it up automatically if present.
 - Wording review of "listed on AdvisorFinder" copy (avoid anything reading as endorsement — possible legal glance).
