@@ -535,7 +535,8 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     "also known as" prior name on file. Returns, per match: CRD, name, city/
     state, AUM band, advisor headcount, and a link to the firm's SEC IAPD
     record. State-registered-only firms (not SEC-registered) are included but
-    flagged — our advisor roster coverage for those is much thinner.
+    flagged — purely state-registered firms have no advisor rosters at all;
+    state-listed firms showing rosters are dual-registered.
     """
     unsanitizable = _unsanitizable_supplied_filter(name=name)
     if unsanitizable:
