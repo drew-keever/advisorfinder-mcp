@@ -559,8 +559,9 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
             entry["matched_as"] = f"also known as {format.title_case_firm_name(r['other_name'])}"
         if r["state_only"]:
             entry["caveat"] = (
-                "State-registered adviser — our advisor roster does not cover "
-                "most state-registered firms."
+                "State-registered adviser — advisor rosters cover SEC-registered "
+                "firms only, so no roster is available here; verify on FINRA "
+                "BrokerCheck / SEC IAPD."
             )
         results.append(entry)
 
@@ -605,8 +606,9 @@ def get_firm(crd: str) -> dict:
     if bundle["firm"] is None:
         s = bundle["state_firm"]
         caveats.append(
-            "State-registered adviser — our advisor roster does not cover "
-            "most state-registered firms."
+            "State-registered adviser — advisor rosters cover SEC-registered "
+            "firms only, so no roster is available here; verify on FINRA "
+            "BrokerCheck / SEC IAPD."
         )
         payload = {
             "found": True,
@@ -743,8 +745,10 @@ def get_database_stats() -> dict:
         "coverage": {
             "state_firms_with_advisor_rosters": f"{state_firms_with_reps}/{state_firms_count}",
             "note": (
-                "Advisor rosters cover SEC-registered firms; most state-registered "
-                "firms are not covered — an empty roster does not mean nobody works there."
+                "Advisor rosters cover SEC-registered advisers only, complete as "
+                "of 2026-08 — purely state-registered firms have no rosters at "
+                "all (a state-registered firm showing a roster is dual-registered "
+                "with the SEC); an empty roster does not mean nobody works there."
             ),
         },
     }

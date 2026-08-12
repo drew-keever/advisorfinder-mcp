@@ -8,7 +8,7 @@ Internal prep doc. Everything both reviews will ask for, pre-filled. Fields mark
 
 - **Name:** AdvisorFinder
 - **Short description (≤100 chars):** Search and vet SEC-registered financial advisors: profiles, disclosures, firm fees, credentials.
-- **Long description:** AdvisorFinder gives your assistant direct access to official SEC/FINRA registration data on 416,000+ investment adviser representatives and 30,000+ advisory firms. Check whether an advisor is registered and has disclosures on record, review their work history, exams, and credentials, compare firms' size and ADV-filed fee structures, or browse advisors by city and state — all with verification links back to SEC IAPD and FINRA BrokerCheck. Built by AdvisorFinder, the platform for finding and comparing financial advisors.
+- **Long description:** AdvisorFinder gives your assistant direct access to official SEC/FINRA registration data on 416,000+ investment adviser representatives (as of 2026-08) and 30,000+ advisory firms. Check whether an advisor is registered and has disclosures on record, review their work history, exams, and credentials, compare firms' size and ADV-filed fee structures, or browse advisors by city and state — all with verification links back to SEC IAPD and FINRA BrokerCheck. Built by AdvisorFinder, the platform for finding and comparing financial advisors.
 - **Category:** Finance (or "Research/Data" where offered)
 - **MCP endpoint:** `https://mcp.advisorfinder.com/mcp` (streamable HTTP)
 - **Authentication:** None (public, read-only data)
