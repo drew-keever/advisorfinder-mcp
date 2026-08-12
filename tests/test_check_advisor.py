@@ -43,6 +43,29 @@ def test_check_by_unique_name():
     assert result["disclosure"]["status"] == "disclosed_no_detail"
 
 
+def test_check_by_crd_includes_name_suffix():
+    # Post-sweep resume-round: ia_reps.name_suffix. 1000011 ROBERT JONES JR.
+    # shares last name JONES with 1000003 MARY JONES (deliberately, see
+    # tests/fixtures/make_fixture_source.py) but is a distinct advisor, found
+    # directly by CRD here (not via the name-search ambiguity path).
+    result = server.check_advisor(name_or_crd="1000011")
+    assert result["found"] is True
+    assert result["name"] == "Robert Jones Jr."
+
+
+def test_check_by_name_finds_suffixed_advisor_via_jr_not_junior():
+    # FTS tokenizes 'JR.' (indexed, export-side) to the plain token "jr" --
+    # "jr" must match, "junior" must not (it's simply a different word, not a
+    # synonym the tokenizer expands).
+    result = server.check_advisor(name_or_crd="robert jones jr")
+    assert result["found"] is True
+    assert result["crd"] == "1000011"
+    assert result["name"] == "Robert Jones Jr."
+
+    result = server.check_advisor(name_or_crd="robert jones junior")
+    assert result["found"] is False
+
+
 def test_check_ambiguous_two_smiths():
     result = server.check_advisor(name_or_crd="smith")
     _envelope_keys_present(result)

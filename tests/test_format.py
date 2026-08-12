@@ -44,6 +44,25 @@ def test_title_case_name_none_and_empty():
     assert fmt.title_case_name("") is None
 
 
+def test_title_case_name_jr_suffix_with_trailing_dot():
+    # name_suffix values from the export (Task: post-sweep resume-round,
+    # name_suffix column) look like "JR." WITH the trailing dot -- unlike
+    # "III"/"II"/"IV", which have no dot and hit the explicit _SUFFIXES
+    # branch. "jr." never matches that branch (it's "jr." != "jr"), but
+    # falls through to the generic cap_part() path, where plain
+    # str.capitalize() on "jr." happens to already yield "Jr." -- this is a
+    # characterization test pinning that (already-correct) behavior, not a
+    # bugfix.
+    assert fmt.title_case_name("SMITH JOHN JR.") == "Smith John Jr."
+    assert fmt.title_case_name("ROBERT JONES JR.") == "Robert Jones Jr."
+
+
+def test_title_case_name_jr_suffix_idempotent():
+    once = fmt.title_case_name("ROBERT JONES JR.")
+    twice = fmt.title_case_name(once)
+    assert once == twice == "Robert Jones Jr."
+
+
 # ── URL builders ──────────────────────────────────────────────────────────────
 
 def test_iapd_individual_url():

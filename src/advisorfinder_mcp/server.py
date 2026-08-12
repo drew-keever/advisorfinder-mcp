@@ -30,8 +30,8 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
-def _full_name(first, middle, last) -> str:
-    return format.title_case_name(" ".join(p for p in (first, middle, last) if p))
+def _full_name(first, middle, last, suffix=None) -> str:
+    return format.title_case_name(" ".join(p for p in (first, middle, last, suffix) if p))
 
 
 def _individual_verify_links(crd: str) -> dict:
@@ -176,7 +176,8 @@ def search_advisors(
     results = []
     for r in rows:
         full_name = " ".join(
-            p for p in (r["first_name"], r["middle_name"], r["last_name"]) if p
+            p for p in (r["first_name"], r["middle_name"], r["last_name"], r["name_suffix"])
+            if p
         )
         firms_out = [
             {
@@ -284,7 +285,7 @@ def get_advisor(crd: str) -> dict:
     payload = {
         "found": True,
         "crd": crd,
-        "name": _full_name(rep["first_name"], rep["middle_name"], rep["last_name"]),
+        "name": _full_name(rep["first_name"], rep["middle_name"], rep["last_name"], rep["name_suffix"]),
         "title": title,
         "bio": bio,
         "employment": employment,
@@ -321,7 +322,7 @@ def _check_verdict(crd: str, bundle: dict) -> dict:
     payload = {
         "found": True,
         "crd": crd,
-        "name": _full_name(rep["first_name"], rep["middle_name"], rep["last_name"]),
+        "name": _full_name(rep["first_name"], rep["middle_name"], rep["last_name"], rep["name_suffix"]),
         "registration": {
             "active": rep["ia_scope"] == "Active",
             "registered_states": registered_states,
@@ -392,7 +393,7 @@ def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None =
             firm_name = r["firms"][0]["firm_name"] if r["firms"] else None
             candidates.append({
                 "crd": r["ind_source_id"],
-                "name": _full_name(r["first_name"], r["middle_name"], r["last_name"]),
+                "name": _full_name(r["first_name"], r["middle_name"], r["last_name"], r["name_suffix"]),
                 "firm": format.title_case_firm_name(firm_name) if firm_name else None,
             })
         return format.envelope(

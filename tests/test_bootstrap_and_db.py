@@ -30,16 +30,24 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 # was added to close.
 NO_MARKETPLACE_FIXTURE_DB = Path(__file__).parent / "fixtures" / "mcp_public_no_marketplace.db"
 
-# The other repo's worktree that owns the REAL export scripts (Tasks 1-2 of the
-# marketplace-layer plan) -- see tests/fixtures/README.md for the full
-# regeneration commands. Only test_marketplace_functions_*_when_table_absent
-# below shells out to it (to build a genuinely v3-but-no---marketplace DB
-# variant); every other marketplace test reads the already-committed
-# tests/fixtures/mcp_public.db.
-_OTHER_WORKTREE = Path(
-    "/Users/lv/projects/advisorfinder/firm-intelligence-worktrees/marketplace"
-)
-_OTHER_VENV_PYTHON = _OTHER_WORKTREE / ".venv" / "bin" / "python"
+# The other repo (firm-intelligence, MAIN checkout) that owns the REAL export
+# scripts -- see tests/fixtures/README.md for the full regeneration commands.
+# Only test_marketplace_functions_*_when_table_absent below shells out to it
+# (to build a genuinely v3-but-no---marketplace DB variant); every other
+# marketplace test reads the already-committed tests/fixtures/mcp_public.db.
+#
+# Post-sweep resume-round (2026-08): repointed from the formerly-used sibling
+# worktree (firm-intelligence-worktrees/marketplace) to the main checkout --
+# that worktree predates the marketplace-sanitizer merge (@5654333, adds
+# ia_reps.name_suffix + the roster-completeness sweep) and is being retired.
+# The main repo keeps no persistent committed venv, so this looks for the
+# small throwaway one documented in tests/fixtures/README.md
+# (`.venv-fixture`); this test skips (doesn't fail) when that venv is absent
+# -- it only re-validates provenance, the contract itself is already enforced
+# unconditionally by test_marketplace_functions_are_graceful_when_table_absent
+# above.
+_OTHER_WORKTREE = Path("/Users/lv/projects/advisorfinder/firm-intelligence")
+_OTHER_VENV_PYTHON = _OTHER_WORKTREE / ".venv-fixture" / "bin" / "python"
 
 
 # ── bootstrap: MCP_DB_PATH short-circuit ─────────────────────────────────────
@@ -136,7 +144,7 @@ def test_get_meta_returns_export_meta_dict():
     meta = db.get_meta()
     assert meta["ia_reps_as_of"] == "2026-05-20"
     assert meta["firms_as_of"] == "2026-05-01"
-    assert meta["advisors_count"] == "9"
+    assert meta["advisors_count"] == "10"
 
 
 def test_get_meta_is_cached():
@@ -163,14 +171,15 @@ def test_set_db_path_clears_meta_cache():
 
 def test_disclosure_tally_matches_corrected_four_state_contract():
     tally = db.disclosure_tally()
-    # Fixture (9 advisors): 1000001/1000005/1000006/1000008/1000009 ->
+    # Fixture (10 advisors, post-sweep resume-round -- adds 1000011 ROBERT
+    # JONES JR.): 1000001/1000005/1000006/1000008/1000009/1000011 ->
     # none_reported; 1000002 -> disclosed_with_detail; 1000003/1000004 ->
     # disclosed_no_detail; 1000007 -> unknown.
-    assert tally["none_reported"] == 5
+    assert tally["none_reported"] == 6
     assert tally["disclosed_no_detail"] == 2
     assert tally["disclosed_with_detail"] == 1
     assert tally["unknown"] == 1
-    assert sum(tally.values()) == 9
+    assert sum(tally.values()) == 10
 
 
 # ── marketplace: db.get_marketplace_by_crd / search_marketplace /
@@ -309,20 +318,21 @@ def test_marketplace_functions_are_graceful_when_table_absent():
 
 
 # ── marketplace: provenance test for the fixture above. Rebuilds an
-#    equivalent no---marketplace DB LIVE via the real script from the sibling
-#    firm-intelligence worktree, to prove the committed
+#    equivalent no---marketplace DB LIVE via the real script from the
+#    firm-intelligence repo's main checkout, to prove the committed
 #    mcp_public_no_marketplace.db fixture's shape actually matches what that
 #    real script produces (not just a hand-maintained stand-in). This one MAY
-#    skip when the sibling worktree/venv is absent (e.g. after that worktree
-#    is merged and removed) -- that's fine here specifically, because the
-#    contract itself is already enforced unconditionally by the test above;
-#    this one only re-validates provenance, not the contract. ────────────────
+#    skip when that repo's throwaway fixture venv (.venv-fixture, see
+#    tests/fixtures/README.md) is absent -- that's fine here specifically,
+#    because the contract itself is already enforced unconditionally by the
+#    test above; this one only re-validates provenance, not the contract. ───
 
 def test_marketplace_functions_graceful_absence_provenance_via_real_build_script(tmp_path):
     if not _OTHER_VENV_PYTHON.exists():
         pytest.skip(
-            f"other worktree venv not found at {_OTHER_VENV_PYTHON} -- "
-            "cannot re-derive the no---marketplace fixture from the real build script"
+            f"firm-intelligence fixture venv not found at {_OTHER_VENV_PYTHON} -- "
+            "cannot re-derive the no---marketplace fixture from the real build script "
+            "(see tests/fixtures/README.md to create it)"
         )
 
     source_db = tmp_path / "fixture_source.db"

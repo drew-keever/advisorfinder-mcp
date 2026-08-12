@@ -30,6 +30,7 @@ Design notes (why the population looks the way it does):
     1000007 CASEY UNKNOWNFLAG has_disclosure=NULL, NO iar_details row   -> unknown
     1000008 MORGAN NOROW      has_disclosure='N', NO iar_details row    -> none_reported
     1000009 JOSÉ GARCÍA       has_disclosure='N', row exists            -> none_reported
+    1000011 ROBERT JONES JR.  has_disclosure='N', NO iar_details row    -> none_reported
   JANE SMITH and JOHN SMITH share last name SMITH -> ambiguous check_advisor("smith").
   1000009 JOSÉ GARCÍA carries accented Latin characters specifically to exercise
   fts_query()'s diacritic-folding: the advisor_fts index is built with
@@ -63,6 +64,14 @@ state-registered/BD-side advisors whose CRDs legitimately never appear in the
 SEC roster, and sanitize_marketplace.py no longer fails the build over that
 mismatch (it ships the row, flagged). 1000010 is intentionally never inserted
 into ia_reps here so that fixture stays true to that real-world shape.
+
+Post-sweep resume-round note (2026-08, firm-intelligence @5654333 merge):
+adds ia_reps.name_suffix (values like 'JR.'/'III'/NULL, per the firm-intelligence
+data-sweep). 1000011 ROBERT JONES JR. exercises this: same last name as 1000003
+MARY JONES (deliberately, to prove display/search still work with two same-
+surname advisors) but a different first name, so existing single-match
+assertions on "mary jones" (fts_query() ANDs every token) are unaffected --
+1000010 stays reserved/absent from ia_reps (see above), so this uses 1000011.
 """
 import json
 import sqlite3
@@ -125,7 +134,7 @@ CREATE TABLE firm_other_names (
 
 CREATE TABLE ia_reps (
     ind_source_id TEXT PRIMARY KEY, first_name TEXT, middle_name TEXT, last_name TEXT,
-    ia_scope TEXT, has_disclosure TEXT, crd_numbers TEXT, firm_names TEXT,
+    name_suffix TEXT, ia_scope TEXT, has_disclosure TEXT, crd_numbers TEXT, firm_names TEXT,
     branch_states TEXT, fetched_date TEXT
 );
 
@@ -137,7 +146,7 @@ CREATE TABLE ia_rep_firms (
 
 CREATE TABLE iar_details (
     ind_source_id TEXT PRIMARY KEY, first_name TEXT, middle_name TEXT, last_name TEXT,
-    full_name TEXT, ia_scope TEXT, bc_scope TEXT, industry_start_date TEXT,
+    name_suffix TEXT, full_name TEXT, ia_scope TEXT, bc_scope TEXT, industry_start_date TEXT,
     has_disclosure TEXT, ia_has_disclosure TEXT, current_firm_id TEXT, current_firm_name TEXT,
     current_firm_since TEXT, current_branch_city TEXT, current_branch_state TEXT,
     prev_employment_count INTEGER, state_exams TEXT, product_exams TEXT, principal_exams TEXT,
@@ -371,6 +380,19 @@ def build_source_db(db_path: Path) -> Path:
     _insert(conn, "ia_reps", ind_source_id="1000009", first_name="JOSÉ",
             last_name="GARCÍA", ia_scope="Active", has_disclosure="N",
             branch_states='["NY"]', fetched_date="2026-05-20")
+    # 1000011: post-sweep resume-round addition -- exercises the new
+    # ia_reps.name_suffix column (values like 'JR.'/'III'/NULL per the
+    # firm-intelligence data-sweep merge, @5654333). has_disclosure='N', row
+    # exists -> none_reported (an ordinary state; this advisor tests ONLY the
+    # suffix-display/suffix-search path, nothing else). Deliberately a
+    # DIFFERENT first name from 1000003 MARY JONES (same last name, JONES) so
+    # existing single-match assertions on "mary jones" stay a unique hit --
+    # fts_query() ANDs every token, so "mary" AND "jones*" still resolves to
+    # ONLY 1000003. (1000010 is reserved/absent from ia_reps by design -- see
+    # module docstring -- so this uses 1000011.)
+    _insert(conn, "ia_reps", ind_source_id="1000011", first_name="ROBERT",
+            last_name="JONES", name_suffix="JR.", ia_scope="Active",
+            has_disclosure="N", branch_states='["NY"]', fetched_date="2026-05-20")
 
     # ── ia_rep_firms: firm 100001 roster + firm 100002 roster; 1000005 at both;
     #    firm 100003 has NO rows at all -> empty-roster caveat vs its declared
@@ -404,6 +426,9 @@ def build_source_db(db_path: Path) -> Path:
             ia_only="Y")
     _insert(conn, "ia_rep_firms", ind_source_id="1000005", crd_number="100002",
             firm_name="BETA ADVISORS INC", branch_city="BOSTON", branch_state="MA",
+            ia_only="Y")
+    _insert(conn, "ia_rep_firms", ind_source_id="1000011", crd_number="100001",
+            firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
             ia_only="Y")
 
     # ── iar_details: covers with_detail / no_detail / none_reported states.
@@ -489,7 +514,7 @@ def build_source_db(db_path: Path) -> Path:
         "source_file": "/fixtures/fixture_source.csv", "total_firms": "3", "skipped": "0",
         "ingest_date": "2026-05-18 09:15:19", "individuals_as_of": "2024-12-31",
         "firms_as_of": "2026-05-01", "website_check_as_of": "2026-05-19",
-        "ia_reps_as_of": "2026-05-20", "ia_reps_count": "9",
+        "ia_reps_as_of": "2026-05-20", "ia_reps_count": "10",
     }.items():
         _insert(conn, "ingest_meta", key=k, value=v)
 

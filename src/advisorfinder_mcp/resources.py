@@ -79,10 +79,13 @@ def coverage_and_limitations() -> str:
 
 ## What's NOT covered
 
-- **State-registered-only firms**: most are not in our roster at all. A
-  handful appear (linked via an active IAR who is also tied to a covered
-  firm), but treat any state-registered firm's advisor roster as incomplete
-  by default.
+- **Purely state-registered advisers**: advisor rosters cover IARs at
+  SEC-registered advisers only — complete as of 2026-08 (416,000+ active
+  IARs; validated within 1% of FINRA's CRD statistics, and per-firm against
+  Form ADV Item 5 self-reports). Purely state-registered advisers (~16k
+  firms, ~47k IARs per NASAA) have no rosters; state-listed firms showing
+  rosters are dual-registered. An empty roster for a state-registered firm
+  means not covered, not empty.
 - **Disclosure detail**: we store disclosure STATUS, never the underlying
   event narratives, allegations, or settlement amounts. Always check FINRA
   BrokerCheck / SEC IAPD for the full record.

@@ -35,7 +35,7 @@ No account, no API key, no authentication — it's free and read-only.
 
 ## What's in the data
 
-- **213,000+ active investment adviser representatives** at SEC-registered firms, with employment history, exams, registered states, and self-reported designations
+- **416,000+ active investment adviser representatives** at SEC-registered firms, with employment history, exams, registered states, and self-reported designations
 - **15,000+ SEC-registered advisory firms** — size, client types, fee arrangements, ADV-filed fee structures, branch locations, prior names
 - **16,000+ state-registered advisory firms** (reduced profiles)
 - **A few hundred of those advisors** are also listed on the AdvisorFinder marketplace, searchable directly via `find_bookable_advisors`
@@ -48,7 +48,7 @@ Some advisors are listed on AdvisorFinder's marketplace. Their listings add self
 ## Honest limitations
 
 - **Disclosure detail is deliberately not republished.** We show whether an advisor has disclosures on record and how many; for the events themselves we link to FINRA BrokerCheck. Never treat "has disclosures" as automatically disqualifying — or "none reported" as a guarantee.
-- **Advisor rosters cover SEC-registered firms.** Most state-registered firms (small RIAs) don't have individual advisor records here — an empty roster means "not covered," not "nobody works there."
+- **Advisor rosters cover IARs at SEC-registered advisers only** — complete as of 2026-08 (416,000+ active IARs; validated within 1% of FINRA's CRD statistics, and per-firm against Form ADV Item 5 self-reports). Purely state-registered advisers (~16k firms, ~47k IARs per NASAA) have no rosters; state-listed firms showing rosters are dual-registered. An empty roster for a state-registered firm means not covered, not empty.
 - **Designations (CFP®, CFA, etc.) are self-reported** in regulatory filings and not independently verified.
 - **Fee data is extracted from ADV brochures** and may be estimated — always confirm current fees with the firm.
 - Data is refreshed from SEC bulk filings; each response carries its `data_as_of` vintage.

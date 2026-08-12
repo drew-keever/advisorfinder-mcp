@@ -9,7 +9,7 @@ generators here:
   the top of that file for exactly which advisor/firm covers which case.
 - `make_fixture_marketplace.py` builds a small AdFi marketplace-advisor xlsx
   (the raw, un-sanitized export shape) feeding `build_mcp_public_db.py`'s
-  optional `--marketplace` flag — see its docstring for which of the 9 fixture
+  optional `--marketplace` flag — see its docstring for which of the fixture
   advisors becomes a rich vs. minimal marketplace member, and which one is
   present in the marketplace xlsx but deliberately excluded by
   `marketplace_sitemap.xml` (proves the sitemap-scoping gate).
@@ -28,10 +28,43 @@ schema_version=3 export that simply never created `marketplace_advisors`.
 It exists so `tests/test_bootstrap_and_db.py::test_marketplace_functions_are_graceful_when_table_absent`
 can assert the graceful-absence contract (`get_marketplace_by_crd` → `None`,
 `search_marketplace` → `[]`, `marketplace_stats` → `None`) unconditionally —
-no dependency on the sibling firm-intelligence worktree, no skip, works in CI
+no dependency on the sibling firm-intelligence repo, no skip, works in CI
 and on any machine. (A separate, clearly-skippable provenance test rebuilds
 an equivalent DB live via the real script, to prove this fixture's shape
 actually matches current script output — see that test's docstring.)
+
+## The other repo's location
+
+The REAL export script (`scripts/build_mcp_public_db.py`) lives in the
+firm-intelligence repo's MAIN checkout:
+
+```
+/Users/lv/projects/advisorfinder/firm-intelligence
+```
+
+(As of the post-sweep resume-round, 2026-08: this repo's `main` branch has
+merged both the marketplace-export workstream AND a data-sweep round —
+`ia_reps.name_suffix` plus a roster-completeness fix, commit `5654333`. The
+formerly-used sibling worktree, `firm-intelligence-worktrees/marketplace`,
+predates that merge — it is missing `name_suffix` entirely and is being
+retired; do not point regeneration at it anymore.)
+
+That repo does not keep a persistent committed venv. Create a small
+throwaway one there before regenerating (it only needs `openpyxl`, for the
+`--marketplace` branch):
+
+```bash
+cd /Users/lv/projects/advisorfinder/firm-intelligence
+python3 -m venv .venv-fixture
+.venv-fixture/bin/pip install -q --upgrade pip
+.venv-fixture/bin/pip install -q openpyxl
+```
+
+Before regenerating, confirm that repo's `main` is clean and at the commit
+you expect (`git -C /Users/lv/projects/advisorfinder/firm-intelligence status`
+/ `log --oneline -1`) — regenerating against a dirty or unexpected checkout
+silently bakes in whatever uncommitted script changes happen to be sitting
+there.
 
 ## Regenerate
 
@@ -42,12 +75,13 @@ actually matches current script output — see that test's docstring.)
 # 2. Build the fixture marketplace xlsx into scratch space.
 .venv/bin/python tests/fixtures/make_fixture_marketplace.py /tmp/fixture_marketplace.xlsx
 
-# 3. Run the real export script (from the OTHER repo's worktree, using ITS venv —
-#    it needs openpyxl for the --marketplace branch) against both. --out expects
-#    a DIRECTORY. --marketplace-sitemap accepts a local file path (as here) or an
-#    https:// URL (fetched live) — tests/production always pass a local path.
-/Users/lv/projects/advisorfinder/firm-intelligence-worktrees/marketplace/.venv/bin/python \
-  /Users/lv/projects/advisorfinder/firm-intelligence-worktrees/marketplace/scripts/build_mcp_public_db.py \
+# 3. Run the real export script (from the OTHER repo's MAIN checkout, using ITS
+#    fixture venv — it needs openpyxl for the --marketplace branch) against
+#    both. --out expects a DIRECTORY. --marketplace-sitemap accepts a local
+#    file path (as here) or an https:// URL (fetched live) —
+#    tests/production always pass a local path.
+/Users/lv/projects/advisorfinder/firm-intelligence/.venv-fixture/bin/python \
+  /Users/lv/projects/advisorfinder/firm-intelligence/scripts/build_mcp_public_db.py \
   --source /tmp/fixture_source.db \
   --out /tmp/fixture_out \
   --marketplace /tmp/fixture_marketplace.xlsx \
@@ -65,8 +99,8 @@ cp /tmp/fixture_out/manifest.json tests/fixtures/manifest.json
 .venv/bin/python tests/fixtures/make_fixture_source.py /tmp/fixture_source_nm.db
 
 # 2. Run the real export script WITHOUT --marketplace / --marketplace-sitemap.
-/Users/lv/projects/advisorfinder/firm-intelligence-worktrees/marketplace/.venv/bin/python \
-  /Users/lv/projects/advisorfinder/firm-intelligence-worktrees/marketplace/scripts/build_mcp_public_db.py \
+/Users/lv/projects/advisorfinder/firm-intelligence/.venv-fixture/bin/python \
+  /Users/lv/projects/advisorfinder/firm-intelligence/scripts/build_mcp_public_db.py \
   --source /tmp/fixture_source_nm.db \
   --out /tmp/fixture_out_nm
 
@@ -107,3 +141,16 @@ unconditionally (`"0"`/`None` when `--marketplace` is omitted) and supports the
 optional `marketplace_advisors` table. v3 is the SERVER contract, not a
 data-presence flag — a v3 build without `--marketplace` is still schema
 version 3, just without that one optional table.
+
+### Post-sweep resume-round (2026-08): `ia_reps.name_suffix`
+
+The firm-intelligence data-sweep round added an `ia_reps.name_suffix` column
+(values like `'JR.'`/`'III'`/`NULL`) and made the SEC-side IAR roster complete
+(previously ~52% silently truncated). Neither change bumped
+`SCHEMA_VERSION` — it's still `3`: `name_suffix` is a new optional-in-practice
+column the server now reads explicitly (see `db.search_advisors()`'s column
+list and `format.title_case_name()`'s suffix handling), not a change to the
+v3 contract's shape (table presence / `export_meta` keys). `make_fixture_source.py`
+adds one suffixed advisor (`1000011`, `ROBERT JONES JR.`) so both committed
+fixtures exercise this column; regenerate both (above) whenever
+`make_fixture_source.py` changes.

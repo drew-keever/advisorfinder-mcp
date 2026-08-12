@@ -29,6 +29,15 @@ def test_found_basic_shape():
     assert result["crd"] == "1000002"
 
 
+def test_name_includes_suffix_when_present():
+    # Post-sweep resume-round: ia_reps.name_suffix (e.g. 'JR.'/'III'/NULL).
+    # 1000011 ROBERT JONES JR. carries a suffix; 1000002 (above) has none, so
+    # this also pins that a NULL suffix doesn't add a trailing space/None.
+    result = server.get_advisor(crd="1000011")
+    assert result["found"] is True
+    assert result["name"] == "Robert Jones Jr."
+
+
 def test_employment_current_first_then_previous():
     # Entity suffixes stay uppercase via title_case_firm_name ("LLC", not "Llc").
     result = server.get_advisor(crd="1000002")

@@ -21,7 +21,7 @@ def test_counts_match_fixture():
     result = server.get_database_stats()
     assert result["firms_count"] == 3
     assert result["state_firms_count"] == 1
-    assert result["advisors_count"] == 9
+    assert result["advisors_count"] == 10  # post-sweep resume-round: +1000011
 
 
 def test_vintages_present():
@@ -33,7 +33,8 @@ def test_vintages_present():
 def test_disclosure_tally_includes_unknown_bucket():
     # CORRECTED CONTRACT (keyed on has_disclosure only — see
     # format.disclosure_status() / db.disclosure_tally()):
-    #   none_reported=5 (1000001,1000005,1000006,1000008,1000009 — all 'N', row or not)
+    #   none_reported=6 (1000001,1000005,1000006,1000008,1000009,1000011 — all 'N', row or not;
+    #                    1000011 ROBERT JONES JR. added in the post-sweep resume-round)
     #   disclosed_no_detail=2 (1000003 row+count0, 1000004 'Y' no row at all)
     #   disclosed_with_detail=1 (1000002)
     #   unknown=1 (1000007 — has_disclosure NULL/missing, no row)
@@ -45,7 +46,7 @@ def test_disclosure_tally_includes_unknown_bucket():
     # to trust a separately-owned script to keep matching it.
     result = server.get_database_stats()
     tally = result["disclosure_tally"]
-    assert tally["none_reported"] == 5
+    assert tally["none_reported"] == 6
     assert tally["disclosed_no_detail"] == 2
     assert tally["disclosed_with_detail"] == 1
     assert tally["unknown"] == 1

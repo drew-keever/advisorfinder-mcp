@@ -176,6 +176,33 @@ def test_search_curly_apostrophe_matches_ohearn():
     assert "1000004" in crds
 
 
+# ── name_suffix (post-sweep resume-round): ia_reps.name_suffix ('JR.'/'III'/
+#    NULL). 1000011 ROBERT JONES JR. exercises both the display path (suffix
+#    appended to the rendered name) and the FTS search path (the export's
+#    advisor_fts index carries the suffix in the indexed name -- tokenizing
+#    'JR.' to the plain token "jr", NOT "junior"). ───────────────────────────
+
+def test_search_name_includes_suffix():
+    result = server.search_advisors(name="robert jones")
+    assert result["result_count"] == 1
+    assert result["results"][0]["crd"] == "1000011"
+    assert result["results"][0]["name"] == "Robert Jones Jr."
+
+
+def test_search_by_jr_token_matches_suffixed_advisor():
+    result = server.search_advisors(name="jones jr")
+    crds = {r["crd"] for r in result["results"]}
+    assert "1000011" in crds
+
+
+def test_search_by_junior_does_not_match_suffixed_advisor():
+    # "junior" is a different word from the indexed "jr" token -- the
+    # tokenizer doesn't expand/normalize one to the other.
+    result = server.search_advisors(name="jones junior")
+    crds = {r["crd"] for r in result["results"]}
+    assert "1000011" not in crds
+
+
 # ── marketplace enrichment (Task 4): a labeled listing block is joined per
 #    result row (one db.get_marketplace_by_crd lookup per returned row, AFTER
 #    ranking/limit) -- but must never change WHICH rows match or their ORDER.

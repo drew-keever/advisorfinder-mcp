@@ -107,7 +107,7 @@ No CRD numbers needed — search by name, firm, city, or state.
 
 ## Data & Limitations
 
-**Coverage:** SEC-registered investment adviser firms and the active investment adviser representatives (IARs) linked to them. State-registered-only firms are mostly out of scope — a handful appear via a linked IAR, but treat any state-registered firm's advisor roster as incomplete by default. Use `get_database_stats` for current firm/advisor counts and per-source data vintages (as-of dates), which move independently of this package's version.
+**Coverage:** SEC-registered investment adviser firms and the active investment adviser representatives (IARs) linked to them. Advisor rosters cover IARs at SEC-registered advisers only — complete as of 2026-08 (416,000+ active IARs; validated within 1% of FINRA's CRD statistics, and per-firm against Form ADV Item 5 self-reports). Purely state-registered advisers (~16k firms, ~47k IARs per NASAA) have no rosters; state-listed firms showing rosters are dual-registered. An empty roster for a state-registered firm means not covered, not empty. Use `get_database_stats` for current firm/advisor counts and per-source data vintages (as-of dates), which move independently of this package's version.
 
 **Disclosure detail is deliberately not republished here.** We store and surface a disclosure *status* (one of the four states above), never the underlying event narratives, allegations, or settlement amounts. Always check [FINRA BrokerCheck](https://brokercheck.finra.org) or [SEC IAPD](https://adviserinfo.sec.gov) directly for the full disclosure record before making any decision.
 

@@ -32,7 +32,8 @@ Three rows, three cases:
     crd-valid row.
   - "qv3Y4u6v" / crd 1000010 (REGGIE STATE): populated like a real row, IS in
     tests/fixtures/marketplace_sitemap.xml, but crd 1000010 does NOT exist in
-    make_fixture_source.py's ia_reps table (which only populates 1000001-1000009).
+    make_fixture_source.py's ia_reps table (which populates 1000001-1000009
+    and 1000011 -- 1000010 is deliberately skipped, see that file's docstring).
     Gate A2 (2026-08-09) Ruling 1: this is the "state-registered/BD-side advisor
     whose CRD legitimately isn't in ia_reps" case -- the real
     sanitize_marketplace.py no longer fails the build over a crd_mismatch, so

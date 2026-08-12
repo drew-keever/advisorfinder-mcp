@@ -119,7 +119,8 @@ def disclosure_tally() -> dict:
 def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> list[dict]:
     """Returns up to `limit` advisor bundles matching all supplied filters
     (AND semantics across name/firm/city/state). Each bundle: ind_source_id,
-    first/middle/last name, has_disclosure, `firms` (every ia_rep_firms row
+    first/middle/last name, name_suffix (e.g. 'JR.'/'III', per the post-sweep
+    resume-round schema addition), has_disclosure, `firms` (every ia_rep_firms row
     for that advisor — not just the ones that matched a firm/city/state
     filter), and `iar_row` (the iar_details row, or None -> 'unknown' four-
     state disclosure).
@@ -186,8 +187,8 @@ def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> li
                 params.append(q)
 
         sql = (
-            "SELECT ind_source_id, first_name, middle_name, last_name, has_disclosure "
-            "FROM ia_reps WHERE " + " AND ".join(where) + " "
+            "SELECT ind_source_id, first_name, middle_name, last_name, name_suffix, "
+            "has_disclosure FROM ia_reps WHERE " + " AND ".join(where) + " "
             "ORDER BY last_name, first_name LIMIT ?"
         )
         params.append(limit)
@@ -210,6 +211,7 @@ def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> li
                 "first_name": r["first_name"],
                 "middle_name": r["middle_name"],
                 "last_name": r["last_name"],
+                "name_suffix": r["name_suffix"],
                 "has_disclosure": r["has_disclosure"],
                 "firms": [dict(fr) for fr in firm_rows],
                 "iar_row": dict(iar_row) if iar_row else None,
