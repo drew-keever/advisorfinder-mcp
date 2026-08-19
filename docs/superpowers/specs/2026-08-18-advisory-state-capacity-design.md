@@ -280,10 +280,22 @@ Named here so the work does not grow:
 - **The stale Datasette copy** `db/serve/firms_serve.db` — 213,697 rows against
   416,491.
 
-## Open item for Drew
+## The three note strings are PROVISIONAL
 
-The three note strings above are new consumer-facing regulatory copy. Existing
-coverage copy in this repo is validated and cited. These notes are written
-conservatively — they state only what the data says and explicitly avoid explaining
-registration law. Confirm whether they need the same review treatment as the coverage
-copy before shipping.
+**Decided by Drew, 2026-08-18: he reviews and approves the final wording before any
+implementation begins.**
+
+The broker note, the pending-CE note, and the zero-state note are new consumer-facing
+regulatory copy. Existing coverage copy in this repo is validated and cited, so new
+copy of this kind does not go straight to code. The strings shown above are drafts.
+They state only what the data says and deliberately avoid explaining registration law.
+
+Rules for the implementation plan:
+
+- Treat all three strings as placeholders. Build the structure around them.
+- The plan must carry an explicit gate: **Drew's approved wording is in hand before
+  the task that writes these strings starts.**
+- Wording changes must not require code changes. Keep each string in one place, so a
+  later edit is a text change and nothing else.
+- Tests assert the *presence and placement* of each note, never its exact prose, so
+  approved wording can land without rewriting tests.
