@@ -107,9 +107,21 @@ data we would only reduce to one integer. The export therefore carries a derived
 }
 ```
 
-`also_registered_as_broker` is present only when `registered_states_bc_count > 0`
-— 329,689 of 412,580 exported advisors (79.9%). It is omitted entirely otherwise,
-never rendered as zero.
+`also_registered_as_broker` is present only when `registered_states_bc_count` is a
+positive integer — 329,689 of 412,580 exported advisors (79.9%). It is omitted
+entirely otherwise, never rendered as zero. The server treats `0` and `NULL` the same
+way: omit. It must not compare a `NULL` with `>`.
+
+The number inside `note` is templated from `state_count` in the same expression that
+sets the field. It is never built from a second variable. This is the defect class we
+are already fixing once — a count embedded in a sentence that nothing enforces.
+
+**This block appears in `check_advisor` as well as `get_advisor`.** `check_advisor` is
+the tool a consumer reaches for when asking "can this person advise me in Ohio?", and
+it is where the answer changes most: 2 states where it showed 29. Without the broker
+block, that tool answers a bare "no" for a person who is in fact a registered broker
+in Ohio — the exact failure in the opposite direction that decision 2 exists to
+prevent.
 
 ### Advisor with a continuing-education course outstanding (1,802 exported)
 
@@ -189,7 +201,10 @@ field is omitted. **Never guess a capacity.** A missing flag is not an adviser f
 2. Derive `registered_states_bc_count` at export time from
    `registered_states_scoped`: the count of distinct states where
    `regScope = 'BC'` and `status` is in the same five-value set used for `IA`.
-   The raw JSON stays out of the export.
+   The raw JSON stays out of the export. Write **`0`, not `NULL`**, when an advisor
+   has no broker states, so the column carries one meaning. Write `NULL` only when
+   `registered_states_scoped` itself is absent, which means *not fetched*, not *zero*.
+   The server omits the block for both values.
 3. `EXPORT_SCHEMA["advisor_employments"]`: add `ia_only TEXT`.
 4. `project_employments()`: carry `e.get("iaOnly")` into the new column. Do not
    collapse rows here — the merge is the server's job, and the export stays a
@@ -219,7 +234,8 @@ New tests, all against the regenerated fixture:
 1. An advisor with both registrations returns advisory states only, and the count
    matches `registered_states_ia`.
 2. `also_registered_as_broker` is present when the count is positive and absent when
-   it is zero.
+   the count is `0` **and** when it is `NULL`. It appears in both `get_advisor` and
+   `check_advisor`, and its note repeats the same number as `state_count`.
 3. A pending-CE advisor lists the state in both arrays and carries the note.
 4. A zero-advisory-state advisor returns an empty array **and** the note.
 5. Duplicate job rows merge to one row with the correct capacity.
