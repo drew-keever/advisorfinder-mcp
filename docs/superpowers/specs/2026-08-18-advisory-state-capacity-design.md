@@ -103,7 +103,7 @@ data we would only reduce to one integer. The export therefore carries a derived
 "advisory_states": ["Florida", "Texas"],
 "also_registered_as_broker": {
   "state_count": 29,
-  "note": "Also registered as a broker-dealer agent in 29 states. Selling securities is not the same as giving investment advice. See the BrokerCheck link below."
+  "note": "Registered as a broker-dealer agent in 29 states. Selling securities is not the same as giving investment advice. See the BrokerCheck record linked in this response."
 }
 ```
 
@@ -128,7 +128,7 @@ prevent.
 ```json
 "advisory_states": ["California", "Texas"],
 "advisory_states_pending_ce": ["California"],
-"advisory_states_pending_ce_note": "Registered in this state, with an annual continuing-education course outstanding. This is an administrative status, not a restriction and not a disclosure event."
+"advisory_states_pending_ce_note": "Registration is in place in these states. An annual continuing-education course is outstanding. This is an administrative status, not a restriction and not a disclosure event."
 ```
 
 The pending-CE states are a subset of `advisory_states` and are listed in both. They
@@ -139,7 +139,7 @@ advisor.
 
 ```json
 "advisory_states": [],
-"advisory_states_note": "No state investment-adviser registrations are on record for this person in the SEC data. This is not a disclosure or disciplinary finding. Check the IAPD record linked below."
+"advisory_states_note": "No state investment-adviser registrations are on record for this person in the SEC data. This is not a disclosure or disciplinary finding. Check the IAPD record linked in this response."
 ```
 
 This case matters most. 2,378 of these advisors show a long state list today, so the
@@ -280,22 +280,31 @@ Named here so the work does not grow:
 - **The stale Datasette copy** `db/serve/firms_serve.db` — 213,697 rows against
   416,491.
 
-## The three note strings are PROVISIONAL
+## The note strings are APPROVED
 
-**Decided by Drew, 2026-08-18: he reviews and approves the final wording before any
-implementation begins.**
+**Approved by Drew on 2026-08-18.** There are FOUR, not three: planning surfaced an
+advisor with no `iar_details` row at all, which is neither "none on record" nor a
+normal list. The approved set, and the four defects the review round caught, are
+recorded in the plan at Task 2 Step 3 — that block is the source of truth for the
+exact prose.
 
 The broker note, the pending-CE note, and the zero-state note are new consumer-facing
 regulatory copy. Existing coverage copy in this repo is validated and cited, so new
 copy of this kind does not go straight to code. The strings shown above are drafts.
 They state only what the data says and deliberately avoid explaining registration law.
 
-Rules for the implementation plan:
+Four defects were fixed during that review, and each is now a tested property:
 
-- Treat all three strings as placeholders. Build the structure around them.
-- The plan must carry an explicit gate: **Drew's approved wording is in hand before
-  the task that writes these strings starts.**
-- Wording changes must not require code changes. Keep each string in one place, so a
-  later edit is a text change and nothing else.
-- Tests assert the *presence and placement* of each note, never its exact prose, so
-  approved wording can land without rewriting tests.
+- **"in 1 states"** — about 35,000 advisors have exactly one broker state, so the
+  broker note takes a pre-built count phrase and renders "1 state".
+- **A presupposing "Also"** — for the 3,479 zero-advisory-state advisors the broker
+  note sits beside the none-on-record note, where "Also registered as a broker" would
+  imply an advisory registration the person does not have. The word is gone.
+- **Positional "below"** — the payload is JSON rendered in any order by the consuming
+  assistant, so no note may claim a position. All say "linked in this response".
+- **"this state" on an array** — 214 of 1,811 pending-CE advisors have more than one
+  such state, so that note is now plural-safe.
+
+Standing rules, unchanged: each string lives in exactly one place so a later wording
+change is a text edit; tests assert presence, placement and the four properties above,
+never full prose.

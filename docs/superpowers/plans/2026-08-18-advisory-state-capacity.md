@@ -22,7 +22,7 @@
 - No "endorsed/recommended/vetted by AdvisorFinder" wording anywhere (enforced by `tests/test_no_endorsement_wording.py`).
 - Coverage copy is mirrored across `src/advisorfinder_mcp/resources.py` + `README.md` + `docs/mcp-help.md` — change all three together or none (enforced by `tests/test_coverage_wording.py`).
 - Fixtures are built by the real firm-intelligence scripts and are **never hand-edited** (`tests/fixtures/README.md`).
-- **WORDING GATE:** the four note strings in Task 2 are placeholders. Drew approves the final wording before Task 2 starts. Tests assert presence and placement, never exact prose.
+- **WORDING: APPROVED** by Drew on 2026-08-18, after a review round that fixed a singular/plural bug, removed a presupposing "Also", replaced positional "below" wording, and made the pending-CE note plural-safe. Use the strings in Task 2 Step 3 verbatim. Tests assert presence, placement and those four properties — never full prose.
 
 ---
 
@@ -234,7 +234,7 @@ duplicate adviser/broker row pair. schema_version 3 -> 4."
 
 ### Task 2: Wording constants and the three pure helpers
 
-**GATE: do not start this task until Drew has approved the four note strings.** The strings below are placeholders. Everything else in the task is final.
+**Wording approved by Drew on 2026-08-18.** Use the four strings in Step 3 verbatim — they are the reviewed versions, not drafts. The comment block above them records why four specific phrasings are deliberate; do not undo them.
 
 **Files:**
 - Modify: `src/advisorfinder_mcp/format.py`
@@ -295,7 +295,30 @@ def test_advisory_states_pending_ce_never_adds_a_state():
 def test_broker_block_present_with_the_count_in_the_note():
     block = format.broker_registration_block({"registered_states_bc_count": 29})
     assert block["state_count"] == 29
-    assert "29" in block["note"]
+    assert "29 states" in block["note"]
+    # No "Also": for a zero-advisory-state advisor this note sits beside
+    # ADVISORY_STATES_NONE_NOTE, where "Also" would presuppose an advisory
+    # registration the person does not have.
+    assert not block["note"].startswith("Also")
+
+
+def test_broker_block_uses_the_singular_for_one_state():
+    # About 35,000 advisors have exactly one broker state. "in 1 states" is a bug.
+    block = format.broker_registration_block({"registered_states_bc_count": 1})
+    assert "1 state" in block["note"]
+    assert "1 states" not in block["note"]
+
+
+def test_notes_never_claim_a_position_in_the_payload():
+    # The payload is JSON rendered in any order by the consuming assistant, so
+    # no note may say "below".
+    for note in (
+        format.ADVISORY_STATES_NONE_NOTE,
+        format.ADVISORY_STATES_UNAVAILABLE_NOTE,
+        format.ADVISORY_STATES_PENDING_CE_NOTE,
+        format.broker_registration_block({"registered_states_bc_count": 3})["note"],
+    ):
+        assert "below" not in note.lower()
 
 
 def test_broker_block_absent_for_zero_and_for_null():
@@ -378,32 +401,42 @@ Expected: FAIL — `AttributeError: module 'advisorfinder_mcp.format' has no att
 Add to `src/advisorfinder_mcp/format.py`, above the new helpers. Keeping every string here — and nowhere else — is what makes a wording change a text edit.
 
 ```python
-# ── advisory-state wording (PROVISIONAL — Drew approves before ship) ──────────
-# All four strings live here and nowhere else, so approved wording lands as a
-# text edit with no code or test changes. Tests assert placement, not prose.
+# ── advisory-state wording (APPROVED by Drew 2026-08-18) ─────────────────────
+# All four strings live here and nowhere else, so a later wording change stays a
+# text edit. Tests assert placement, not prose.
+#
+# Four wording decisions are deliberate — do not "improve" them back:
+#   - No "Also" in the broker note. For the 3,479 zero-advisory-state advisors
+#     the broker note appears next to ADVISORY_STATES_NONE_NOTE, and "Also"
+#     would presuppose an advisory registration the person does not have.
+#   - "linked in this response", never "below". The payload is JSON read by an
+#     assistant that renders keys in any order; there is no "below".
+#   - The pending-CE note is plural-safe. 214 of 1,811 advisors have more than
+#     one pending-CE state, so "this state" would be wrong for them.
+#   - The broker note takes a pre-built count phrase, so "1 state" never
+#     renders as "1 states". About 35,000 advisors have exactly one.
 
 ADVISORY_STATES_NONE_NOTE = (
     "No state investment-adviser registrations are on record for this person in "
     "the SEC data. This is not a disclosure or disciplinary finding. Check the "
-    "IAPD record linked below."
+    "IAPD record linked in this response."
 )
 
 ADVISORY_STATES_UNAVAILABLE_NOTE = (
-    "State registration detail is not available for this person in our data. "
-    "This is not a statement that no registrations exist. Check the IAPD record "
-    "linked below."
+    "State registration detail is not available for this person in our data. It "
+    "does not mean there are none. Check the IAPD record linked in this response."
 )
 
 ADVISORY_STATES_PENDING_CE_NOTE = (
-    "Registered in this state, with an annual continuing-education course "
-    "outstanding. This is an administrative status, not a restriction and not a "
-    "disclosure event."
+    "Registration is in place in these states. An annual continuing-education "
+    "course is outstanding. This is an administrative status, not a restriction "
+    "and not a disclosure event."
 )
 
-BROKER_ALSO_REGISTERED_NOTE = (
-    "Also registered as a broker-dealer agent in {state_count} states. Selling "
-    "securities is not the same as giving investment advice. See the BrokerCheck "
-    "link below."
+BROKER_REGISTRATION_NOTE = (
+    "Registered as a broker-dealer agent in {count_phrase}. Selling securities is "
+    "not the same as giving investment advice. See the BrokerCheck record linked "
+    "in this response."
 )
 
 CAPACITY_BOTH = "investment adviser and broker-dealer"
@@ -453,15 +486,17 @@ def broker_registration_block(iar_row) -> dict | None:
     """Labeled broker-dealer registration count, or None when there is nothing
     to say. 0 (no broker states) and NULL (scope never fetched) both yield None,
     so no caller compares NULL with '>'. The note's number is templated from
-    state_count in this one expression — never built from a second variable."""
+    state_count in this one expression — never built from a second variable.
+    Singular is handled here too: "1 state", never "1 states"."""
     if iar_row is None:
         return None
     count = _row_value(iar_row, "registered_states_bc_count")
     if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
         return None
+    count_phrase = "1 state" if count == 1 else f"{count} states"
     return {
         "state_count": count,
-        "note": BROKER_ALSO_REGISTERED_NOTE.format(state_count=count),
+        "note": BROKER_REGISTRATION_NOTE.format(count_phrase=count_phrase),
     }
 
 
@@ -1119,6 +1154,6 @@ Then call `get_advisor` for CRD 6805515 against the live endpoint and confirm Fl
 
 **One spec gap found and closed here.** The spec named three note strings. Planning surfaced a fourth case: an advisor with **no `iar_details` row at all** (three exist in the fixture; production currently has none). That is neither "none on record" nor a normal list — it is "we hold no detail record". `ADVISORY_STATES_UNAVAILABLE_NOTE` covers it, and `test_advisory_states_missing_detail_row_is_not_none_on_record` pins that the two notes never collapse into one. **This fourth string needs Drew's approval alongside the other three.**
 
-**Type consistency.** `advisory_states_block()`, `broker_registration_block()`, `merge_employment_rows()`, `_ia_only_flag()`, `_split_state_csv()` and the constants `ADVISORY_STATES_NONE_NOTE`, `ADVISORY_STATES_UNAVAILABLE_NOTE`, `ADVISORY_STATES_PENDING_CE_NOTE`, `BROKER_ALSO_REGISTERED_NOTE`, `CAPACITY_BOTH`, `CAPACITY_IA`, `CAPACITY_BC` are spelled identically in Task 2's implementation, Task 2's tests, and Tasks 3-4's call sites. `derive_bc_state_counts()` and `_IAR_DETAILS_SELECT_COLS` appear only in Task 1.
+**Type consistency.** `advisory_states_block()`, `broker_registration_block()`, `merge_employment_rows()`, `_ia_only_flag()`, `_split_state_csv()` and the constants `ADVISORY_STATES_NONE_NOTE`, `ADVISORY_STATES_UNAVAILABLE_NOTE`, `ADVISORY_STATES_PENDING_CE_NOTE`, `BROKER_REGISTRATION_NOTE`, `CAPACITY_BOTH`, `CAPACITY_IA`, `CAPACITY_BC` are spelled identically in Task 2's implementation, Task 2's tests, and Tasks 3-4's call sites. `derive_bc_state_counts()` and `_IAR_DETAILS_SELECT_COLS` appear only in Task 1.
 
 **Deliberate red checkpoint.** Task 1 Step 9 fails on purpose — the whitelist references source columns the old fixture generator lacks. Task 3 Step 7 resolves it. Any executor running tasks out of order needs to know that, which is why it is stated in both places.
