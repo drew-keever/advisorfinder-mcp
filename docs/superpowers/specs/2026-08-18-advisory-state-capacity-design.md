@@ -147,6 +147,16 @@ list visibly empties. The note must read as *none on record*, never as *unknown*
 never as a finding against the advisor. An empty array with no note is not acceptable
 output.
 
+**A hazard worth naming.** The NONE-vs-UNAVAILABLE choice is keyed on whether an
+`iar_details` row exists, not on whether scope was actually fetched. All 416,491
+rows today carry fetched scope, so the split is safe in practice. But if a future
+partial or interrupted scope fetch ever inserts a detail row before its IA/BC scope
+is populated, that row's `registered_states_ia` would be NULL, and this same logic
+would confidently report NONE — a false negative about a real person's registration.
+The durable fix at that point is to key UNAVAILABLE on the presence of scope data,
+not row presence, or to have the export refuse to write a detail row with unfetched
+scope.
+
 **One empty array is not this case.** `_regulatory_join()` (`server.py:429`) returns
 `registered_states: []` for a marketplace member whose CRD is not in the SEC roster —
 132 of 294 members, adjudicated on 2026-08-09 as a real path. That empty list means

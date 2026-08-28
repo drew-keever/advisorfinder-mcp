@@ -94,6 +94,17 @@ def test_adviser_only_advisor_has_no_broker_block():
     assert "also_registered_as_broker" not in result
 
 
+def test_no_iar_details_row_gets_unavailable_note_not_none_note():
+    # 1000004 (O'HEARN) has no iar_details row at all -- a THIRD meaning,
+    # distinct from "none on record": we hold no detail record for this
+    # person, so the tool must not claim a positive finding of zero
+    # registrations.
+    result = server.get_advisor(crd="1000004")
+    assert result["advisory_states"] == []
+    assert result["advisory_states_note"] == format.ADVISORY_STATES_UNAVAILABLE_NOTE
+    assert result["advisory_states_note"] != format.ADVISORY_STATES_NONE_NOTE
+
+
 def test_duplicate_job_is_merged_with_a_capacity_label():
     result = server.get_advisor(crd="1000014")
     current = [e for e in result["employment"] if e["is_current"]]

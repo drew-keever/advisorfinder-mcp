@@ -448,6 +448,19 @@ def advisory_states_block(iar_row) -> dict:
       - no iar_details row      -> we hold no detail record (UNAVAILABLE note)
       - row, empty IA column    -> none on record (NONE note)
       - row, populated column   -> the advisory states, already distinct upstream
+
+    NONE vs. UNAVAILABLE is keyed on row presence, not on whether scope was
+    ever fetched. Today that is safe: every iar_details row that exists also
+    carries fetched IA/BC scope (verified 0 NULLs across all 416,491 rows). But
+    if a future upstream run ever inserts a detail row before scope has been
+    fetched, `registered_states_ia` would be NULL/empty on that row, and this
+    function would take the NONE branch — telling a consumer, confidently,
+    that an advisor holds no advisory registrations when we simply never
+    fetched them. That is the same confident-false-negative failure this
+    whole feature exists to eliminate, just moved one layer down. If this ever
+    becomes reachable, the durable fix is to key UNAVAILABLE on the presence
+    of scope data itself (not row presence), or to have the export refuse to
+    write a detail row with unfetched scope.
     """
     if iar_row is None:
         return {"advisory_states": [], "advisory_states_note": ADVISORY_STATES_UNAVAILABLE_NOTE}
