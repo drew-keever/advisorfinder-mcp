@@ -388,3 +388,166 @@ def envelope(
         "verify": verify or {},
         "coverage_caveats": caveats or [],
     }
+
+
+# ── advisory-state wording (APPROVED by Drew 2026-08-18) ─────────────────────
+# All four strings live here and nowhere else, so a later wording change stays a
+# text edit. Tests assert placement, not prose.
+#
+# Four wording decisions are deliberate — do not "improve" them back:
+#   - No "Also" in the broker note. For the 3,479 zero-advisory-state advisors
+#     the broker note appears next to ADVISORY_STATES_NONE_NOTE, and "Also"
+#     would presuppose an advisory registration the person does not have.
+#   - "linked in this response", never "below". The payload is JSON read by an
+#     assistant that renders keys in any order; there is no "below".
+#   - The pending-CE note is plural-safe. 214 of 1,811 advisors have more than
+#     one pending-CE state, so "this state" would be wrong for them.
+#   - The broker note takes a pre-built count phrase, so "1 state" never
+#     renders as "1 states". About 35,000 advisors have exactly one.
+
+ADVISORY_STATES_NONE_NOTE = (
+    "No state investment-adviser registrations are on record for this person in "
+    "the SEC data. This is not a disclosure or disciplinary finding. Check the "
+    "IAPD record linked in this response."
+)
+
+ADVISORY_STATES_UNAVAILABLE_NOTE = (
+    "State registration detail is not available for this person in our data. It "
+    "does not mean there are none. Check the IAPD record linked in this response."
+)
+
+ADVISORY_STATES_PENDING_CE_NOTE = (
+    "Registration is in place in these states. An annual continuing-education "
+    "course is outstanding. This is an administrative status, not a restriction "
+    "and not a disclosure event."
+)
+
+BROKER_REGISTRATION_NOTE = (
+    "Registered as a broker-dealer agent in {count_phrase}. Selling securities is "
+    "not the same as giving investment advice. See the BrokerCheck record linked "
+    "in this response."
+)
+
+CAPACITY_BOTH = "investment adviser and broker-dealer"
+CAPACITY_IA = "investment adviser"
+CAPACITY_BC = "broker-dealer"
+
+
+# ── advisory states / broker registration / employment merge ────────────────
+
+def _split_state_csv(raw) -> list[str]:
+    if not raw:
+        return []
+    return [s.strip() for s in str(raw).split(",") if s.strip()]
+
+
+def advisory_states_block(iar_row) -> dict:
+    """The advisory-state keys for a tool payload.
+
+    Three distinct outcomes, which must never be conflated:
+      - no iar_details row      -> we hold no detail record (UNAVAILABLE note)
+      - row, empty IA column    -> none on record (NONE note)
+      - row, populated column   -> the advisory states, already distinct upstream
+    """
+    if iar_row is None:
+        return {"advisory_states": [], "advisory_states_note": ADVISORY_STATES_UNAVAILABLE_NOTE}
+
+    states = _split_state_csv(_row_value(iar_row, "registered_states_ia"))
+    if not states:
+        return {"advisory_states": [], "advisory_states_note": ADVISORY_STATES_NONE_NOTE}
+
+    block = {"advisory_states": states}
+    # Pending-CE is an annotation on states already in the list, never an
+    # addition: intersect so a future upstream change cannot grow the list.
+    pending = [s for s in states if s in set(_split_state_csv(
+        _row_value(iar_row, "registered_states_ia_pending_ce")
+    ))]
+    if pending:
+        block["advisory_states_pending_ce"] = pending
+        block["advisory_states_pending_ce_note"] = ADVISORY_STATES_PENDING_CE_NOTE
+    return block
+
+
+def broker_registration_block(iar_row) -> dict | None:
+    """Labeled broker-dealer registration count, or None when there is nothing
+    to say. 0 (no broker states) and NULL (scope never fetched) both yield None,
+    so no caller compares NULL with '>'. The note's number is templated from
+    state_count in this one expression — never built from a second variable.
+    Singular is handled here too: "1 state", never "1 states"."""
+    if iar_row is None:
+        return None
+    count = _row_value(iar_row, "registered_states_bc_count")
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        return None
+    count_phrase = "1 state" if count == 1 else f"{count} states"
+    return {
+        "state_count": count,
+        "note": BROKER_REGISTRATION_NOTE.format(count_phrase=count_phrase),
+    }
+
+
+def _ia_only_flag(row):
+    """'Y'/'N' normalized, or None when the flag is absent or unrecognized.
+    An unrecognized flag is treated as absent — never as an adviser flag."""
+    raw = _row_value(row, "ia_only")
+    if raw is None:
+        return None
+    flag = str(raw).strip().upper()
+    return flag if flag in ("Y", "N") else None
+
+
+def merge_employment_rows(rows) -> list[dict]:
+    """Collapse the adviser/broker row pair the SEC returns for one job.
+
+    IAPD returns the same job twice for a dual-registered person: one object
+    with iaOnly='Y' and one with iaOnly='N', same firm and same registration
+    dates, differing only in their branch-office list (and in letter case).
+
+    The group key includes the dates on purpose — keying on firm alone would
+    merge a genuine rehire at the same firm into one row. firm_name is the
+    fallback key when firm_crd is null, so two different no-CRD firms never
+    merge with each other.
+    """
+    groups = {}
+    order = []
+    for row in rows:
+        crd = _row_value(row, "firm_crd")
+        firm_key = ("crd", str(crd)) if crd else ("name", str(_row_value(row, "firm_name") or ""))
+        key = (
+            firm_key,
+            bool(_row_value(row, "is_current")),
+            _row_value(row, "start_date"),
+            _row_value(row, "end_date"),
+        )
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    merged = []
+    for key in order:
+        group = groups[key]
+        flags = [_ia_only_flag(r) for r in group]
+        # Branch tie-break: prefer the adviser row's office. This is an
+        # advisory product, so that is the office worth showing.
+        preferred = next((r for r, f in zip(group, flags) if f == "Y"), group[0])
+        out = {
+            "firm_crd": _row_value(preferred, "firm_crd"),
+            "firm_name": _row_value(preferred, "firm_name"),
+            "is_current": bool(_row_value(preferred, "is_current")),
+            "start_date": _row_value(preferred, "start_date"),
+            "end_date": _row_value(preferred, "end_date"),
+            "branch_city": _row_value(preferred, "branch_city"),
+            "branch_state": _row_value(preferred, "branch_state"),
+        }
+        present = {f for f in flags if f is not None}
+        if None in flags or not present:
+            pass  # a missing flag is not an adviser flag — say nothing
+        elif present == {"Y", "N"}:
+            out["capacity"] = CAPACITY_BOTH
+        elif present == {"Y"}:
+            out["capacity"] = CAPACITY_IA
+        elif present == {"N"}:
+            out["capacity"] = CAPACITY_BC
+        merged.append(out)
+    return merged

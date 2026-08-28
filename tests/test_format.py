@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+from advisorfinder_mcp import format
 from advisorfinder_mcp import format as fmt
 
 
@@ -403,3 +404,139 @@ def test_title_case_firm_name_dotted_acronyms_keep_dots():
 def test_title_case_firm_name_idempotent_and_none():
     assert fmt.title_case_firm_name("Alpha Wealth LLC") == "Alpha Wealth LLC"
     assert fmt.title_case_firm_name(None) is None
+
+
+# ── advisory states / broker registration / employment merge ──────────────────
+
+def test_advisory_states_lists_only_the_ia_column():
+    row = {"registered_states_ia": "Florida,Texas", "registered_states_ia_pending_ce": None}
+    assert format.advisory_states_block(row) == {"advisory_states": ["Florida", "Texas"]}
+
+
+def test_advisory_states_empty_column_gets_the_none_on_record_note():
+    row = {"registered_states_ia": "", "registered_states_ia_pending_ce": None}
+    block = format.advisory_states_block(row)
+    assert block["advisory_states"] == []
+    assert block["advisory_states_note"] == format.ADVISORY_STATES_NONE_NOTE
+
+
+def test_advisory_states_missing_detail_row_is_not_none_on_record():
+    # No iar_details row is a THIRD meaning: we hold no detail record for this
+    # person. It must not claim "none on record", which is a positive finding.
+    block = format.advisory_states_block(None)
+    assert block["advisory_states"] == []
+    assert block["advisory_states_note"] == format.ADVISORY_STATES_UNAVAILABLE_NOTE
+    assert block["advisory_states_note"] != format.ADVISORY_STATES_NONE_NOTE
+
+
+def test_advisory_states_pending_ce_is_listed_in_both_arrays():
+    row = {"registered_states_ia": "California,Texas", "registered_states_ia_pending_ce": "California"}
+    block = format.advisory_states_block(row)
+    assert block["advisory_states"] == ["California", "Texas"]
+    assert block["advisory_states_pending_ce"] == ["California"]
+    assert block["advisory_states_pending_ce_note"] == format.ADVISORY_STATES_PENDING_CE_NOTE
+
+
+def test_advisory_states_pending_ce_never_adds_a_state():
+    # Defensive: upstream says pending-CE is a strict subset (1,811 of 1,811).
+    # If that ever changes, we must not silently grow the advisory list.
+    row = {"registered_states_ia": "California", "registered_states_ia_pending_ce": "California,Nevada"}
+    block = format.advisory_states_block(row)
+    assert block["advisory_states"] == ["California"]
+    assert block["advisory_states_pending_ce"] == ["California"]
+
+
+def test_broker_block_present_with_the_count_in_the_note():
+    block = format.broker_registration_block({"registered_states_bc_count": 29})
+    assert block["state_count"] == 29
+    assert "29 states" in block["note"]
+    # No "Also": for a zero-advisory-state advisor this note sits beside
+    # ADVISORY_STATES_NONE_NOTE, where "Also" would presuppose an advisory
+    # registration the person does not have.
+    assert not block["note"].startswith("Also")
+
+
+def test_broker_block_uses_the_singular_for_one_state():
+    # About 35,000 advisors have exactly one broker state. "in 1 states" is a bug.
+    block = format.broker_registration_block({"registered_states_bc_count": 1})
+    assert "1 state" in block["note"]
+    assert "1 states" not in block["note"]
+
+
+def test_notes_never_claim_a_position_in_the_payload():
+    # The payload is JSON rendered in any order by the consuming assistant, so
+    # no note may say "below".
+    for note in (
+        format.ADVISORY_STATES_NONE_NOTE,
+        format.ADVISORY_STATES_UNAVAILABLE_NOTE,
+        format.ADVISORY_STATES_PENDING_CE_NOTE,
+        format.broker_registration_block({"registered_states_bc_count": 3})["note"],
+    ):
+        assert "below" not in note.lower()
+
+
+def test_broker_block_absent_for_zero_and_for_null():
+    assert format.broker_registration_block({"registered_states_bc_count": 0}) is None
+    assert format.broker_registration_block({"registered_states_bc_count": None}) is None
+    assert format.broker_registration_block({}) is None
+    assert format.broker_registration_block(None) is None
+
+
+def test_merge_employments_collapses_the_adviser_broker_pair():
+    rows = [
+        {"firm_crd": "79", "firm_name": "J.P. MORGAN SECURITIES LLC", "is_current": 1,
+         "start_date": "2023-06-06", "end_date": None, "branch_city": "NAPLES",
+         "branch_state": "FL", "ia_only": "Y"},
+        {"firm_crd": "79", "firm_name": "J.P. MORGAN SECURITIES LLC", "is_current": 1,
+         "start_date": "2023-06-06", "end_date": None, "branch_city": "Naples",
+         "branch_state": "FL", "ia_only": "N"},
+    ]
+    merged = format.merge_employment_rows(rows)
+    assert len(merged) == 1
+    assert merged[0]["capacity"] == "investment adviser and broker-dealer"
+    # Branch comes from the ia_only='Y' row: this is an advisory product.
+    assert merged[0]["branch_city"] == "NAPLES"
+
+
+def test_merge_employments_keeps_a_genuine_rehire_separate():
+    rows = [
+        {"firm_crd": "79", "firm_name": "BIG FIRM LLC", "is_current": 1,
+         "start_date": "2020-01-01", "end_date": None, "branch_city": "NY",
+         "branch_state": "NY", "ia_only": "Y"},
+        {"firm_crd": "79", "firm_name": "BIG FIRM LLC", "is_current": 0,
+         "start_date": "2012-01-01", "end_date": "2015-01-01", "branch_city": "NY",
+         "branch_state": "NY", "ia_only": "Y"},
+    ]
+    assert len(format.merge_employment_rows(rows)) == 2
+
+
+def test_merge_employments_falls_back_to_firm_name_when_crd_is_null():
+    rows = [
+        {"firm_crd": None, "firm_name": "NO CRD LLC", "is_current": 1,
+         "start_date": "2020-01-01", "end_date": None, "branch_city": "NY",
+         "branch_state": "NY", "ia_only": "Y"},
+        {"firm_crd": None, "firm_name": "NO CRD LLC", "is_current": 1,
+         "start_date": "2020-01-01", "end_date": None, "branch_city": "NY",
+         "branch_state": "NY", "ia_only": "N"},
+    ]
+    assert len(format.merge_employment_rows(rows)) == 1
+
+
+def test_merge_employments_omits_capacity_when_the_flag_is_missing():
+    rows = [
+        {"firm_crd": "79", "firm_name": "BIG FIRM LLC", "is_current": 1,
+         "start_date": "2020-01-01", "end_date": None, "branch_city": "NY",
+         "branch_state": "NY", "ia_only": None},
+    ]
+    merged = format.merge_employment_rows(rows)
+    assert len(merged) == 1
+    assert "capacity" not in merged[0]
+
+
+def test_merge_employments_single_flag_states_one_capacity():
+    adviser = [{"firm_crd": "1", "firm_name": "A", "is_current": 1, "start_date": "2020-01-01",
+                "end_date": None, "branch_city": "NY", "branch_state": "NY", "ia_only": "Y"}]
+    broker = [{"firm_crd": "2", "firm_name": "B", "is_current": 1, "start_date": "2020-01-01",
+               "end_date": None, "branch_city": "NY", "branch_state": "NY", "ia_only": "N"}]
+    assert format.merge_employment_rows(adviser)[0]["capacity"] == "investment adviser"
+    assert format.merge_employment_rows(broker)[0]["capacity"] == "broker-dealer"
