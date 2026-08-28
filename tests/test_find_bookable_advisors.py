@@ -120,7 +120,10 @@ def test_find_bookable_unmatched_crd_gets_labeled_regulatory_block():
         "brokercheck": format.brokercheck_individual_url("1000010"),
     }
     assert unmatched["registration"]["active"] is None
-    assert unmatched["registration"]["registered_states"] == []
+    assert unmatched["registration"]["advisory_states"] == []
+    # Unmatched-CRD means "not in the SEC roster", NOT "no advisory
+    # registrations on record" — it must not borrow the zero-state note.
+    assert "advisory_states_note" not in unmatched["registration"]
     # Still a fully-formed marketplace listing -- no crash, envelope unchanged.
     assert unmatched["name"] == "Reggie State"
     assert unmatched["profile_url"] == (

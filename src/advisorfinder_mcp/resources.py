@@ -74,8 +74,11 @@ def coverage_and_limitations() -> str:
   with a thin exception — see below).
 - Active investment adviser representatives (IARs) linked to at least one
   covered firm.
-- Registration facts: employment history, exams, registered states,
-  self-reported professional designations, and four-state disclosure STATUS.
+- Registration facts: employment history, exams, state investment-adviser
+  registrations (`advisory_states`; broker-dealer state registrations are
+  counted separately and labeled in `also_registered_as_broker`, never
+  merged), self-reported professional designations, and four-state
+  disclosure STATUS.
 
 ## What's NOT covered
 

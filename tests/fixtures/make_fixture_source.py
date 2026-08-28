@@ -31,6 +31,9 @@ Design notes (why the population looks the way it does):
     1000008 MORGAN NOROW      has_disclosure='N', NO iar_details row    -> none_reported
     1000009 JOSÉ GARCÍA       has_disclosure='N', row exists            -> none_reported
     1000011 ROBERT JONES JR.  has_disclosure='N', NO iar_details row    -> none_reported
+    1000012 DANA PENDINGCE    has_disclosure='N', row exists            -> none_reported (IA states with a CE course outstanding)
+    1000013 RILEY BROKERONLY  has_disclosure='N', row exists            -> none_reported (zero advisory states, 3 broker states)
+    1000014 QUINN DUALJOB     has_disclosure='N', row exists            -> none_reported (one job returned twice, iaOnly Y + N)
   JANE SMITH and JOHN SMITH share last name SMITH -> ambiguous check_advisor("smith").
   1000009 JOSÉ GARCÍA carries accented Latin characters specifically to exercise
   fts_query()'s diacritic-folding: the advisor_fts index is built with
@@ -150,7 +153,10 @@ CREATE TABLE iar_details (
     has_disclosure TEXT, ia_has_disclosure TEXT, current_firm_id TEXT, current_firm_name TEXT,
     current_firm_since TEXT, current_branch_city TEXT, current_branch_state TEXT,
     prev_employment_count INTEGER, state_exams TEXT, product_exams TEXT, principal_exams TEXT,
-    registered_states TEXT, disclosure_count INTEGER, ia_disclosure_count INTEGER,
+    registered_states TEXT,
+    registered_states_ia TEXT, registered_states_ia_pending_ce TEXT,
+    registered_states_scoped TEXT,
+    disclosure_count INTEGER, ia_disclosure_count INTEGER,
     raw_current_employments TEXT, raw_previous_employments TEXT, raw_disclosures TEXT,
     fetched_at TEXT
 );
@@ -200,6 +206,27 @@ CURRENT_EMPLOYMENT_JSON = json.dumps([
             }
         ],
     }
+])
+
+# The duplicate-job shape IAPD really returns for a dual-registered person
+# (real example: CRD 6805515) — the SAME job twice, one object with iaOnly='Y'
+# and one with iaOnly='N', same firmId and same registrationBeginDate, differing
+# only in their branch-office list and its letter case. Used by 1000014.
+DUAL_EMPLOYMENT_JSON = json.dumps([
+    {
+        "firmId": 100001, "firmName": "ALPHA WEALTH LLC", "iaOnly": "Y",
+        "registrationBeginDate": "6/6/2023",
+        "branchOfficeLocations": [
+            {"displayOrder": 1, "locatedAtFlag": "Y", "city": "NAPLES", "state": "FL"},
+        ],
+    },
+    {
+        "firmId": 100001, "firmName": "ALPHA WEALTH LLC", "iaOnly": "N",
+        "registrationBeginDate": "6/6/2023",
+        "branchOfficeLocations": [
+            {"displayOrder": 1, "locatedAtFlag": "Y", "city": "Naples", "state": "FL"},
+        ],
+    },
 ])
 
 PREVIOUS_EMPLOYMENT_JSON = json.dumps([
@@ -393,6 +420,19 @@ def build_source_db(db_path: Path) -> Path:
     _insert(conn, "ia_reps", ind_source_id="1000011", first_name="ROBERT",
             last_name="JONES", name_suffix="JR.", ia_scope="Active",
             has_disclosure="N", branch_states='["NY"]', fetched_date="2026-05-20")
+    # 1000012/1000013/1000014: the advisory-state capacity cases (pending CE,
+    # zero advisory states, duplicate job). All three carry has_disclosure='N'
+    # with an iar_details row -> none_reported, so they add nothing to the
+    # disclosure matrix and only exercise the state/capacity paths.
+    _insert(conn, "ia_reps", ind_source_id="1000012", first_name="DANA",
+            last_name="PENDINGCE", ia_scope="Active", has_disclosure="N",
+            branch_states='["NY"]', fetched_date="2026-05-20")
+    _insert(conn, "ia_reps", ind_source_id="1000013", first_name="RILEY",
+            last_name="BROKERONLY", ia_scope="Active", has_disclosure="N",
+            branch_states='["NY"]', fetched_date="2026-05-20")
+    _insert(conn, "ia_reps", ind_source_id="1000014", first_name="QUINN",
+            last_name="DUALJOB", ia_scope="Active", has_disclosure="N",
+            branch_states='["FL"]', fetched_date="2026-05-20")
 
     # ── ia_rep_firms: firm 100001 roster + firm 100002 roster; 1000005 at both;
     #    firm 100003 has NO rows at all -> empty-roster caveat vs its declared
@@ -430,6 +470,19 @@ def build_source_db(db_path: Path) -> Path:
     _insert(conn, "ia_rep_firms", ind_source_id="1000011", crd_number="100001",
             firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
             ia_only="Y")
+    # 1000012/1000013/1000014 need a roster row of their own: the export keeps
+    # only advisors with ia_scope='Active' AND an ia_rep_firms row
+    # (build_mcp_public_db.py's _kept_advisors), so without one they would
+    # never reach the artifact at all.
+    _insert(conn, "ia_rep_firms", ind_source_id="1000012", crd_number="100001",
+            firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
+            ia_only="Y")
+    _insert(conn, "ia_rep_firms", ind_source_id="1000013", crd_number="100001",
+            firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
+            ia_only="N")
+    _insert(conn, "ia_rep_firms", ind_source_id="1000014", crd_number="100001",
+            firm_name="ALPHA WEALTH LLC", branch_city="NAPLES", branch_state="FL",
+            ia_only="Y")
 
     # ── iar_details: covers with_detail / no_detail / none_reported states.
     #    1000004/1000007/1000008 deliberately have NO row at all (see below) —
@@ -440,7 +493,10 @@ def build_source_db(db_path: Path) -> Path:
             current_firm_name="ALPHA WEALTH LLC", current_firm_since="2015-01-01",
             current_branch_city="NEW YORK", current_branch_state="NY",
             prev_employment_count=0, state_exams="[]", product_exams="[]",
-            principal_exams="[]", registered_states="NY", disclosure_count=0,
+            principal_exams="[]", registered_states="NY",
+            registered_states_ia="NY",
+            registered_states_scoped='[{"state":"NY","regScope":"IA","status":"APPROVED"}]',
+            disclosure_count=0,
             ia_disclosure_count=0, raw_current_employments=None,
             raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
     _insert(conn, "iar_details", ind_source_id="1000002", ia_scope="Active",
@@ -450,6 +506,14 @@ def build_source_db(db_path: Path) -> Path:
             current_branch_state="NY", prev_employment_count=1,
             state_exams=STATE_EXAMS, product_exams=PRODUCT_EXAMS,
             principal_exams=PRINCIPAL_EXAMS, registered_states="NY,FL",
+            # Dual-registered: adviser in NY+FL, broker agent in NY/NJ/CT.
+            # NY is shared, so the distinct broker-state count is 3.
+            registered_states_ia="NY,FL",
+            registered_states_scoped='[{"state":"NY","regScope":"IA","status":"APPROVED"},'
+                                     '{"state":"FL","regScope":"IA","status":"APPROVED"},'
+                                     '{"state":"NY","regScope":"BC","status":"APPROVED"},'
+                                     '{"state":"NJ","regScope":"BC","status":"APPROVED"},'
+                                     '{"state":"CT","regScope":"BC","status":"APPROVED"}]',
             disclosure_count=3, ia_disclosure_count=3,
             raw_current_employments=CURRENT_EMPLOYMENT_JSON,
             raw_previous_employments=PREVIOUS_EMPLOYMENT_JSON,
@@ -460,7 +524,10 @@ def build_source_db(db_path: Path) -> Path:
             current_firm_name="BETA ADVISORS INC", current_firm_since="2012-01-15",
             current_branch_city="BOSTON", current_branch_state="MA",
             prev_employment_count=0, state_exams="[]", product_exams="[]",
-            principal_exams="[]", registered_states="MA", disclosure_count=0,
+            principal_exams="[]", registered_states="MA",
+            registered_states_ia="MA",
+            registered_states_scoped='[{"state":"MA","regScope":"IA","status":"APPROVED"}]',
+            disclosure_count=0,
             ia_disclosure_count=0, raw_current_employments=None,
             raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
     _insert(conn, "iar_details", ind_source_id="1000005", ia_scope="Active",
@@ -469,6 +536,9 @@ def build_source_db(db_path: Path) -> Path:
             current_firm_since="2016-04-01", current_branch_city="NEW YORK",
             current_branch_state="NY", prev_employment_count=0, state_exams="[]",
             product_exams="[]", principal_exams="[]", registered_states="NY,MA",
+            registered_states_ia="NY,MA",
+            registered_states_scoped='[{"state":"NY","regScope":"IA","status":"APPROVED"},'
+                                     '{"state":"MA","regScope":"IA","status":"APPROVED"}]',
             disclosure_count=0, ia_disclosure_count=0, raw_current_employments=None,
             raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
     _insert(conn, "iar_details", ind_source_id="1000006", ia_scope="Active",
@@ -477,6 +547,8 @@ def build_source_db(db_path: Path) -> Path:
             current_firm_since="2019-09-01", current_branch_city="NEW YORK",
             current_branch_state="NY", prev_employment_count=0, state_exams="[]",
             product_exams="[]", principal_exams="[]", registered_states="CA",
+            registered_states_ia="CA",
+            registered_states_scoped='[{"state":"CA","regScope":"IA","status":"APPROVED"}]',
             disclosure_count=0, ia_disclosure_count=0, raw_current_employments=None,
             raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
     _insert(conn, "iar_details", ind_source_id="1000009", ia_scope="Active",
@@ -485,8 +557,67 @@ def build_source_db(db_path: Path) -> Path:
             current_firm_since="2017-01-01", current_branch_city="NEW YORK",
             current_branch_state="NY", prev_employment_count=0, state_exams="[]",
             product_exams="[]", principal_exams="[]", registered_states="NY",
+            registered_states_ia="NY",
+            registered_states_scoped='[{"state":"NY","regScope":"IA","status":"APPROVED"}]',
             disclosure_count=0, ia_disclosure_count=0, raw_current_employments=None,
             raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
+    # 1000012 DANA PENDINGCE: advisory states with a CE course outstanding.
+    #   Pins that a pending-CE state appears in BOTH arrays and is never
+    #   presented as a restriction.
+    _insert(conn, "iar_details", ind_source_id="1000012", ia_scope="Active",
+            bc_scope="NotInScope", industry_start_date="2015-04-01",
+            has_disclosure="N", ia_has_disclosure="N",
+            current_firm_id="100001", current_firm_name="ALPHA WEALTH LLC",
+            current_firm_since="2019-01-01", current_branch_city="NEW YORK",
+            current_branch_state="NY", prev_employment_count=0,
+            state_exams="[]", product_exams="[]", principal_exams="[]",
+            registered_states="CA,TX", registered_states_ia="CA,TX",
+            registered_states_ia_pending_ce="CA",
+            registered_states_scoped='[{"state":"CA","regScope":"IA","status":"APP_PEND_IARCE"},'
+                                     '{"state":"TX","regScope":"IA","status":"APPROVED"}]',
+            disclosure_count=0, ia_disclosure_count=0,
+            raw_current_employments=None, raw_previous_employments=None,
+            raw_disclosures="[]", fetched_at="2026-08-17")
+
+    # 1000013 RILEY BROKERONLY: zero advisory states, many broker states.
+    #   This is the 3,479-advisor production case, and the one that visibly
+    #   loses a long list. Pins the "none on record" note AND the broker block.
+    _insert(conn, "iar_details", ind_source_id="1000013", ia_scope="Active",
+            bc_scope="Active", industry_start_date="2018-02-01",
+            has_disclosure="N", ia_has_disclosure="N",
+            current_firm_id="100001", current_firm_name="ALPHA WEALTH LLC",
+            current_firm_since="2020-01-01", current_branch_city="NEW YORK",
+            current_branch_state="NY", prev_employment_count=0,
+            state_exams="[]", product_exams="[]", principal_exams="[]",
+            registered_states="NY,NJ,CT", registered_states_ia=None,
+            registered_states_ia_pending_ce=None,
+            registered_states_scoped='[{"state":"NY","regScope":"BC","status":"APPROVED"},'
+                                     '{"state":"NJ","regScope":"BC","status":"APPROVED"},'
+                                     '{"state":"CT","regScope":"BC","status":"APPROVED"}]',
+            disclosure_count=0, ia_disclosure_count=0,
+            raw_current_employments=None, raw_previous_employments=None,
+            raw_disclosures="[]", fetched_at="2026-08-17")
+
+    # 1000014 QUINN DUALJOB: one job returned twice by IAPD (iaOnly Y and N),
+    #   same firm and dates, different branch-office lists and letter case.
+    #   Pins the merge and the capacity label.
+    _insert(conn, "iar_details", ind_source_id="1000014", ia_scope="Active",
+            bc_scope="Active", industry_start_date="2019-12-27",
+            has_disclosure="N", ia_has_disclosure="N",
+            current_firm_id="100001", current_firm_name="ALPHA WEALTH LLC",
+            current_firm_since="2023-06-06", current_branch_city="NAPLES",
+            current_branch_state="FL", prev_employment_count=0,
+            state_exams="[]", product_exams="[]", principal_exams="[]",
+            registered_states="FL,FL,TX,TX", registered_states_ia="FL,TX",
+            registered_states_ia_pending_ce=None,
+            registered_states_scoped='[{"state":"FL","regScope":"IA","status":"APPROVED"},'
+                                     '{"state":"FL","regScope":"BC","status":"APPROVED"},'
+                                     '{"state":"TX","regScope":"IA","status":"APPROVED"},'
+                                     '{"state":"TX","regScope":"BC","status":"APPROVED"}]',
+            disclosure_count=0, ia_disclosure_count=0,
+            raw_current_employments=DUAL_EMPLOYMENT_JSON,
+            raw_previous_employments=None,
+            raw_disclosures="[]", fetched_at="2026-08-17")
     # 1000004 (O'HEARN), 1000007 (UNKNOWNFLAG), 1000008 (NOROW): NO iar_details
     # row inserted for any of them, deliberately.
 

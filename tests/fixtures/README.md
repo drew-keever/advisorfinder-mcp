@@ -24,7 +24,7 @@ advisor profiles.
 `mcp_public_no_marketplace.db` is a SECOND committed fixture: the same
 `make_fixture_source.py` source database run through the real
 `build_mcp_public_db.py` WITHOUT `--marketplace` — i.e. a genuine
-schema_version=3 export that simply never created `marketplace_advisors`.
+current-schema export that simply never created `marketplace_advisors`.
 It exists so `tests/test_bootstrap_and_db.py::test_marketplace_functions_are_graceful_when_table_absent`
 can assert the graceful-absence contract (`get_marketplace_by_crd` → `None`,
 `search_marketplace` → `[]`, `marketplace_stats` → `None`) unconditionally —
@@ -44,7 +44,9 @@ firm-intelligence repo's MAIN checkout:
 
 (As of the post-sweep resume-round, 2026-08: this repo's `main` branch has
 merged both the marketplace-export workstream AND a data-sweep round —
-`ia_reps.name_suffix` plus a roster-completeness fix, commit `5654333`. The
+`ia_reps.name_suffix` plus a roster-completeness fix, commit `5654333`; as of
+the advisory-state capacity round it is at `dd63707`, which carries the
+schema-4 export change. The
 formerly-used sibling worktree, `firm-intelligence-worktrees/marketplace`,
 predates that merge — it is missing `name_suffix` entirely and is being
 retired; do not point regeneration at it anymore.)
@@ -109,8 +111,8 @@ cp /tmp/fixture_out_nm/mcp_public.db tests/fixtures/mcp_public_no_marketplace.db
 ```
 
 Omitting `--marketplace`/`--marketplace-sitemap` still produces a valid
-schema_version=3 DB — `marketplace_advisors` is OPTIONAL-at-runtime (see
-`db._marketplace_table_exists()`), so a v3 build without marketplace data is a
+current-schema DB — `marketplace_advisors` is OPTIONAL-at-runtime (see
+`db._marketplace_table_exists()`), so a build without marketplace data is a
 legitimate shape, just not the one committed as `mcp_public.db`. That's
 exactly the shape `mcp_public_no_marketplace.db` commits, and what the
 provenance test in `tests/test_bootstrap_and_db.py` rebuilds live in
@@ -154,3 +156,16 @@ v3 contract's shape (table presence / `export_meta` keys). `make_fixture_source.
 adds one suffixed advisor (`1000011`, `ROBERT JONES JR.`) so both committed
 fixtures exercise this column; regenerate both (above) whenever
 `make_fixture_source.py` changes.
+
+### Advisory-state capacity round (2026-08): `SCHEMA_VERSION = 4`
+
+The export no longer reads the mixed `iar_details.registered_states` column
+(it counted broker-dealer state registrations as advisory ones). The artifact
+now carries `registered_states_ia`, `registered_states_ia_pending_ce` and the
+derived `registered_states_bc_count INTEGER`, and `advisor_employments` carries
+`ia_only`. That is a shape change the server's queries depend on, so
+`SCHEMA_VERSION` is `4`. `make_fixture_source.py` adds three advisors for the
+new cases (`1000012` pending CE, `1000013` zero advisory states, `1000014`
+duplicate job); the fixture now holds 13 advisors.
+
+`SCHEMA_VERSION` is currently `4` — this is the round that last bumped it.

@@ -31,9 +31,18 @@ def test_check_by_crd():
     _envelope_keys_present(result)
     assert result["found"] is True
     assert result["registration"]["active"] is True
-    assert set(result["registration"]["registered_states"]) == {"NY", "FL"}
+    assert set(result["registration"]["advisory_states"]) == {"NY", "FL"}
     assert result["disclosure"]["status"] == "disclosed_with_detail"
     _no_numeric_score_anywhere(result)
+
+
+def test_check_advisor_reports_advisory_states_and_the_broker_count():
+    result = server.check_advisor(name_or_crd="1000002")
+    assert set(result["registration"]["advisory_states"]) == {"NY", "FL"}
+    assert "registered_states" not in result["registration"]
+    # check_advisor is the "can this person advise me in Ohio?" tool, so the
+    # broker fact must be here too, not only in get_advisor.
+    assert result["registration"]["also_registered_as_broker"]["state_count"] == 3
 
 
 def test_check_by_unique_name():

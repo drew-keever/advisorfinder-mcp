@@ -30,6 +30,9 @@ def test_no_endorsement_wording_anywhere():
         server.get_advisor(crd="1000003"),  # marketplace member (minimal)
         server.get_advisor(crd="1000001"),  # non-member
         server.get_advisor(crd="9999999"),  # not found
+        server.get_advisor(crd="1000012"),  # pending-CE advisory-state note
+        server.get_advisor(crd="1000013"),  # zero-advisory-state (none-on-record) note
+        server.get_advisor(crd="1000004"),  # no iar_details row (unavailable) note
         server.check_advisor(name_or_crd="1000002"),
         server.check_advisor(name_or_crd="smith"),  # ambiguous
         server.check_advisor(name_or_crd="zzznomatchzzz"),
