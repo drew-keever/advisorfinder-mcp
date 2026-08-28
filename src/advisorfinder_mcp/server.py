@@ -223,7 +223,11 @@ def get_advisor(crd: str) -> dict:
     """Get the full profile for an investment adviser representative (IAR) by
     CRD number — no need to search first if you already have it. Returns
     employment history (current firm first, then previous), exams passed,
-    registered states, professional designations (always labeled
+    the states where they hold an investment-adviser registration
+    (`advisory_states`; broker-dealer state registrations are reported
+    separately as a labeled count in `also_registered_as_broker`, because
+    selling securities is not the same as giving investment advice),
+    professional designations (always labeled
     self-reported — none of this data is independently verified), years in
     the industry, and four-state disclosure status (never phrased as
     "clean"/"safe": none_reported / disclosed_no_detail / disclosed_with_detail
@@ -364,10 +368,12 @@ def _check_verdict(crd: str, bundle: dict) -> dict:
 @mcp.tool
 def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None = None) -> dict:
     """Quick yes/no-style verification of an advisor: is their registration
-    active, what states are they registered in, how long have they been in
-    the industry, and their four-state disclosure status. Accepts EITHER a
-    CRD number (all digits) OR a name — optionally narrowed by firm/state to
-    disambiguate common names. If a name matches more than one advisor,
+    active, which states they hold an investment-adviser registration in
+    (`advisory_states`, with any broker-dealer state registrations reported
+    separately as a labeled count in `also_registered_as_broker`), how long
+    they have been in the industry, and their four-state disclosure status.
+    Accepts EITHER a CRD number (all digits) OR a name — optionally narrowed
+    by firm/state to disambiguate common names. If a name matches more than one advisor,
     returns candidates instead of guessing; re-run with the CRD from the list.
     This tool never returns a numeric risk score — only the underlying facts
     (registration status, disclosure status) so you can judge for yourself.
