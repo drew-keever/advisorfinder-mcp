@@ -244,16 +244,19 @@ def get_advisor(crd: str) -> dict:
     iar = bundle["iar"]
     content = bundle["content"]
 
+    # merge_employment_rows() collapses the adviser/broker row pair IAPD
+    # returns for one job, and labels the capacity when it is derivable.
     employment = [
         {
             "firm_name": format.title_case_firm_name(e["firm_name"]),
-            "is_current": bool(e["is_current"]),
+            "is_current": e["is_current"],
             "start_date": e["start_date"],
             "end_date": e["end_date"],
             "branch_city": format.title_case_name(e["branch_city"]) if e["branch_city"] else None,
             "branch_state": e["branch_state"],
+            **({"capacity": e["capacity"]} if "capacity" in e else {}),
         }
-        for e in bundle["employments"]
+        for e in format.merge_employment_rows(bundle["employments"])
     ]
 
     exams = {
@@ -261,7 +264,6 @@ def get_advisor(crd: str) -> dict:
         "product": _parse_exam_json(iar["product_exams"]) if iar else [],
         "principal": _parse_exam_json(iar["principal_exams"]) if iar else [],
     }
-    registered_states = _split_states(iar["registered_states"]) if iar else []
 
     designations = [
         {"code": d["code"], "name": d["name"], "issuing_body": d["issuing_body"], "status": "self-reported"}
@@ -290,12 +292,18 @@ def get_advisor(crd: str) -> dict:
         "bio": bio,
         "employment": employment,
         "exams": exams,
-        "registered_states": registered_states,
+        **format.advisory_states_block(iar),
         "designations": designations,
         "industry_start_date": industry_start_date,
         "years_in_industry": years_in_industry,
         "disclosure": disclosure,
     }
+
+    # Broker-dealer state registrations, labeled as such: present only when
+    # there is a real count to report (see format.broker_registration_block).
+    broker = format.broker_registration_block(iar)
+    if broker is not None:
+        payload["also_registered_as_broker"] = broker
 
     # Marketplace enrichment (Task 4): a labeled listing block, present only
     # for advisors who are also AdvisorFinder marketplace members. The
@@ -316,17 +324,23 @@ def get_advisor(crd: str) -> dict:
 def _check_verdict(crd: str, bundle: dict) -> dict:
     rep = bundle["rep"]
     iar = bundle["iar"]
-    registered_states = _split_states(iar["registered_states"]) if iar else []
     industry_start_date = iar["industry_start_date"] if iar else None
     disclosure = format.disclosure_status(rep["has_disclosure"], iar)
+    # "Can this person advise me in my state?" is the question this tool
+    # answers, so the broker-dealer fact belongs here too — a bare "no" about
+    # a registered broker would mislead.
+    registration = {
+        "active": rep["ia_scope"] == "Active",
+        **format.advisory_states_block(iar),
+    }
+    broker = format.broker_registration_block(iar)
+    if broker is not None:
+        registration["also_registered_as_broker"] = broker
     payload = {
         "found": True,
         "crd": crd,
         "name": _full_name(rep["first_name"], rep["middle_name"], rep["last_name"], rep["name_suffix"]),
-        "registration": {
-            "active": rep["ia_scope"] == "Active",
-            "registered_states": registered_states,
-        },
+        "registration": registration,
         "experience": {
             "industry_start_date": industry_start_date,
             "years_in_industry": format.years_since(industry_start_date),
@@ -422,19 +436,27 @@ def _regulatory_join(crd: str) -> tuple[dict, dict]:
     (crd_mismatches is reported but no longer build-fatal), so db.get_advisor(crd)
     genuinely returns None for them. Returns a labeled fallback disclosure
     block (format.marketplace_unmatched_crd_disclosure) instead of crashing or
-    silently reporting the generic 'unknown' four-state status."""
+    silently reporting the generic 'unknown' four-state status.
+
+    That branch's empty advisory_states list means 'not matched to the SEC
+    roster', which is a DIFFERENT fact from 'no advisory registrations on
+    record'. It therefore never carries the zero-state note — the labeled
+    disclosure block already states why the record is missing."""
     bundle = db.get_advisor(crd)
     if bundle is None:
         return (
-            {"active": None, "registered_states": []},
+            {"active": None, "advisory_states": []},
             format.marketplace_unmatched_crd_disclosure(crd),
         )
     rep = bundle["rep"]
     iar = bundle["iar"]
     registration = {
         "active": rep["ia_scope"] == "Active",
-        "registered_states": _split_states(iar["registered_states"]) if iar else [],
+        **format.advisory_states_block(iar),
     }
+    broker = format.broker_registration_block(iar)
+    if broker is not None:
+        registration["also_registered_as_broker"] = broker
     disclosure = format.disclosure_status(rep["has_disclosure"], iar)
     return registration, disclosure
 

@@ -1,4 +1,4 @@
-from advisorfinder_mcp import server
+from advisorfinder_mcp import format, server
 
 
 def _envelope_keys_present(result):
@@ -56,9 +56,50 @@ def test_exams_parsed_from_json():
     assert result["exams"]["principal"] == []
 
 
-def test_registered_states_split_from_csv():
+def test_advisory_states_split_from_csv():
     result = server.get_advisor(crd="1000002")
-    assert set(result["registered_states"]) == {"NY", "FL"}
+    assert set(result["advisory_states"]) == {"NY", "FL"}
+
+
+# ── advisory-state capacity: the tools report investment-adviser state
+#    registrations only, and label broker-dealer ones separately ─────────────
+
+def test_advisory_states_are_ia_only_and_broker_count_is_labeled():
+    # 1000002 is dual-registered: IA in NY+FL, broker in NY/NJ/CT (3 distinct).
+    result = server.get_advisor(crd="1000002")
+    assert set(result["advisory_states"]) == {"NY", "FL"}
+    assert "registered_states" not in result
+    assert result["also_registered_as_broker"]["state_count"] == 3
+    assert "3" in result["also_registered_as_broker"]["note"]
+
+
+def test_pending_ce_state_appears_in_both_arrays_with_a_note():
+    result = server.get_advisor(crd="1000012")
+    assert set(result["advisory_states"]) == {"CA", "TX"}
+    assert result["advisory_states_pending_ce"] == ["CA"]
+    assert "advisory_states_pending_ce_note" in result
+
+
+def test_zero_advisory_states_says_none_on_record_not_unknown():
+    result = server.get_advisor(crd="1000013")
+    assert result["advisory_states"] == []
+    assert result["advisory_states_note"] == format.ADVISORY_STATES_NONE_NOTE
+    # The broker registration is still surfaced, so a consumer is not told a
+    # flat "not registered" about someone who is a registered broker.
+    assert result["also_registered_as_broker"]["state_count"] == 3
+
+
+def test_adviser_only_advisor_has_no_broker_block():
+    result = server.get_advisor(crd="1000003")
+    assert "also_registered_as_broker" not in result
+
+
+def test_duplicate_job_is_merged_with_a_capacity_label():
+    result = server.get_advisor(crd="1000014")
+    current = [e for e in result["employment"] if e["is_current"]]
+    assert len(current) == 1
+    assert current[0]["capacity"] == "investment adviser and broker-dealer"
+    assert current[0]["branch_city"] == "Naples"
 
 
 def test_designations_always_self_reported():

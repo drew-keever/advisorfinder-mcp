@@ -13,4 +13,9 @@ __version__ = "2.1.0"
 # is bumped to 3 regardless of whether a given export actually included marketplace
 # data — see build_mcp_public_db.py's write_export_meta()/write_manifest() docstrings
 # in the firm-intelligence repo: v3 is the server CONTRACT, not a data-presence flag.
-SCHEMA_VERSION = 3
+#
+# v4 (advisory-state capacity fix): iar_details drops the mixed `registered_states`
+# column (it counted broker-dealer state registrations as advisory ones) and gains
+# `registered_states_ia`, `registered_states_ia_pending_ce` and the derived
+# `registered_states_bc_count INTEGER`; advisor_employments gains `ia_only`.
+SCHEMA_VERSION = 4

@@ -144,7 +144,9 @@ def test_get_meta_returns_export_meta_dict():
     meta = db.get_meta()
     assert meta["ia_reps_as_of"] == "2026-05-20"
     assert meta["firms_as_of"] == "2026-05-01"
-    assert meta["advisors_count"] == "10"
+    # 13 = the 10 disclosure-matrix advisors plus the three advisory-state
+    # capacity advisors (1000012/1000013/1000014).
+    assert meta["advisors_count"] == "13"
 
 
 def test_get_meta_is_cached():
@@ -171,15 +173,16 @@ def test_set_db_path_clears_meta_cache():
 
 def test_disclosure_tally_matches_corrected_four_state_contract():
     tally = db.disclosure_tally()
-    # Fixture (10 advisors, post-sweep resume-round -- adds 1000011 ROBERT
-    # JONES JR.): 1000001/1000005/1000006/1000008/1000009/1000011 ->
+    # Fixture (13 advisors: the post-sweep resume-round added 1000011 ROBERT
+    # JONES JR., the advisory-state capacity round added 1000012/1000013/1000014):
+    # 1000001/1000005/1000006/1000008/1000009/1000011/1000012/1000013/1000014 ->
     # none_reported; 1000002 -> disclosed_with_detail; 1000003/1000004 ->
     # disclosed_no_detail; 1000007 -> unknown.
-    assert tally["none_reported"] == 6
+    assert tally["none_reported"] == 9
     assert tally["disclosed_no_detail"] == 2
     assert tally["disclosed_with_detail"] == 1
     assert tally["unknown"] == 1
-    assert sum(tally.values()) == 10
+    assert sum(tally.values()) == 13
 
 
 # ── marketplace: db.get_marketplace_by_crd / search_marketplace /
