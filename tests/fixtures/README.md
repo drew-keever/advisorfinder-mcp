@@ -144,17 +144,6 @@ optional `marketplace_advisors` table. v3 is the SERVER contract, not a
 data-presence flag — a v3 build without `--marketplace` is still schema
 version 3, just without that one optional table.
 
-### Advisory-state capacity round (2026-08): `SCHEMA_VERSION = 4`
-
-The export no longer reads the mixed `iar_details.registered_states` column
-(it counted broker-dealer state registrations as advisory ones). The artifact
-now carries `registered_states_ia`, `registered_states_ia_pending_ce` and the
-derived `registered_states_bc_count INTEGER`, and `advisor_employments` carries
-`ia_only`. That is a shape change the server's queries depend on, so
-`SCHEMA_VERSION` is `4`. `make_fixture_source.py` adds three advisors for the
-new cases (`1000012` pending CE, `1000013` zero advisory states, `1000014`
-duplicate job); the fixture now holds 13 advisors.
-
 ### Post-sweep resume-round (2026-08): `ia_reps.name_suffix`
 
 The firm-intelligence data-sweep round added an `ia_reps.name_suffix` column
@@ -167,3 +156,16 @@ v3 contract's shape (table presence / `export_meta` keys). `make_fixture_source.
 adds one suffixed advisor (`1000011`, `ROBERT JONES JR.`) so both committed
 fixtures exercise this column; regenerate both (above) whenever
 `make_fixture_source.py` changes.
+
+### Advisory-state capacity round (2026-08): `SCHEMA_VERSION = 4`
+
+The export no longer reads the mixed `iar_details.registered_states` column
+(it counted broker-dealer state registrations as advisory ones). The artifact
+now carries `registered_states_ia`, `registered_states_ia_pending_ce` and the
+derived `registered_states_bc_count INTEGER`, and `advisor_employments` carries
+`ia_only`. That is a shape change the server's queries depend on, so
+`SCHEMA_VERSION` is `4`. `make_fixture_source.py` adds three advisors for the
+new cases (`1000012` pending CE, `1000013` zero advisory states, `1000014`
+duplicate job); the fixture now holds 13 advisors.
+
+`SCHEMA_VERSION` is currently `4` — this is the round that last bumped it.

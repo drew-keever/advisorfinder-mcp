@@ -31,9 +31,9 @@ Design notes (why the population looks the way it does):
     1000008 MORGAN NOROW      has_disclosure='N', NO iar_details row    -> none_reported
     1000009 JOSÉ GARCÍA       has_disclosure='N', row exists            -> none_reported
     1000011 ROBERT JONES JR.  has_disclosure='N', NO iar_details row    -> none_reported
-    1000012 DANA PENDINGCE   IA states with a CE course outstanding
-    1000013 RILEY BROKERONLY zero advisory states, 3 broker states
-    1000014 QUINN DUALJOB    one job returned twice (iaOnly Y + N)
+    1000012 DANA PENDINGCE    has_disclosure='N', row exists            -> none_reported (IA states with a CE course outstanding)
+    1000013 RILEY BROKERONLY  has_disclosure='N', row exists            -> none_reported (zero advisory states, 3 broker states)
+    1000014 QUINN DUALJOB     has_disclosure='N', row exists            -> none_reported (one job returned twice, iaOnly Y + N)
   JANE SMITH and JOHN SMITH share last name SMITH -> ambiguous check_advisor("smith").
   1000009 JOSÉ GARCÍA carries accented Latin characters specifically to exercise
   fts_query()'s diacritic-folding: the advisor_fts index is built with

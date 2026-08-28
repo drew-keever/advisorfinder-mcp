@@ -373,8 +373,9 @@ def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None =
     separately as a labeled count in `also_registered_as_broker`), how long
     they have been in the industry, and their four-state disclosure status.
     Accepts EITHER a CRD number (all digits) OR a name — optionally narrowed
-    by firm/state to disambiguate common names. If a name matches more than one advisor,
-    returns candidates instead of guessing; re-run with the CRD from the list.
+    by firm/state to disambiguate common names. If a name matches more than
+    one advisor, returns candidates instead of guessing; re-run with the CRD
+    from the list.
     This tool never returns a numeric risk score — only the underlying facts
     (registration status, disclosure status) so you can judge for yourself.
     """
