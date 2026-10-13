@@ -88,20 +88,6 @@ def _unsanitizable_supplied_filter(**filters: str | None) -> tuple[str, str] | N
     return None
 
 
-_SERVES_LABELS = {
-    "serves_individuals": "individuals",
-    "serves_hnw": "high-net-worth individuals",
-    "serves_investment_companies": "investment companies",
-    "serves_pooled_vehicles": "pooled investment vehicles",
-    "serves_pension": "pension/profit-sharing plans",
-    "serves_charitable": "charitable organizations",
-    "serves_state_municipal": "state/municipal government entities",
-    "serves_insurance": "insurance companies",
-    "serves_sovereign": "sovereign wealth funds/foreign official institutions",
-    "serves_corporations": "corporations/businesses",
-    "serves_other": "other clients",
-}
-
 _FEE_LABELS = {
     "fee_pct_of_aum": "percentage of AUM",
     "fee_hourly": "hourly charges",
@@ -611,13 +597,14 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
 @mcp.tool
 def get_firm(crd: str) -> dict:
     """Get the full profile for an investment adviser FIRM by CRD number:
-    identity, address, website, AUM band, headcount, who they serve and how
-    they charge (rendered as lists), any disclosure flag, state registrations,
+    identity, address, website, AUM band, headcount, how they charge
+    (a list), any disclosure flag, state registrations,
     office locations (private-residence addresses are withheld per SEC
     privacy rules), prior/other names, fee details from their ADV Part 2A
     brochure (marked as estimated when it is), and how many individual
     advisor records we have on file for them (an empty roster does not
     necessarily mean an empty firm — see the caveat when that happens).
+    Client types are withheld (see client_types_note).
     State-registered-only firms get a reduced profile.
     """
     bundle = db.get_firm(crd)
@@ -654,7 +641,6 @@ def get_firm(crd: str) -> dict:
         return format.envelope(payload, caveats=caveats, verify=_firm_verify_links(crd))
 
     f = bundle["firm"]
-    serves = [label for flag, label in _SERVES_LABELS.items() if f[flag] == "Y"]
     fees = [label for flag, label in _FEE_LABELS.items() if f[flag] == "Y"]
 
     locations = []
@@ -709,7 +695,10 @@ def get_firm(crd: str) -> dict:
         "aum_band": f["aum_band"],
         "total_employees": f["total_employees"],
         "investment_adviser_reps": f["investment_adviser_reps"],
-        "serves": serves,
+        "client_types_note": (
+            "Client types are not available in this data version. See Item 5.D "
+            "of the firm's Form ADV on SEC IAPD (link in verify)."
+        ),
         "fee_arrangements": fees,
         "any_disciplinary": f["any_disciplinary"],
         "state_registrations": _split_states(f["state_registrations"]),

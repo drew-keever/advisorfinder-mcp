@@ -1,3 +1,5 @@
+import json
+
 from advisorfinder_mcp import server
 
 
@@ -30,12 +32,31 @@ def test_found_basic_identity_and_address():
     assert result["aum_band"] == "Not disclosed"
 
 
-def test_serves_and_fee_flags_rendered_as_lists():
+def test_client_types_withheld_and_fee_flags_rendered_as_list():
     result = server.get_firm(crd="100001")
-    assert isinstance(result["serves"], list)
-    assert "individuals" in " ".join(result["serves"]).lower() or len(result["serves"]) > 0
+    assert "serves" not in result
+    assert "client_types_note" in result
+    assert "Item 5.D" in result["client_types_note"]
     assert isinstance(result["fee_arrangements"], list)
     assert len(result["fee_arrangements"]) > 0
+
+
+def test_get_firm_never_emits_sovereign_even_when_serves_sovereign_is_y(monkeypatch):
+    # No fixture firm has serves_sovereign='Y' (and fixtures are not hand-edited),
+    # so force it on the bundle. serves_sovereign is ADV 5G(9) pricing services,
+    # not a client type; it must never surface as "sovereign".
+    from advisorfinder_mcp import db
+
+    real = db.get_firm
+
+    def forced(crd):
+        bundle = real(crd)
+        bundle["firm"] = {**dict(bundle["firm"]), "serves_sovereign": "Y"}
+        return bundle
+
+    monkeypatch.setattr(db, "get_firm", forced)
+    result = server.get_firm(crd="100001")
+    assert "sovereign" not in json.dumps(result, default=str).lower()
 
 
 def test_private_residence_location_phrasing():
