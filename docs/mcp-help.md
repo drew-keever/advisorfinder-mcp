@@ -28,7 +28,7 @@ No account, no API key, no authentication — it's free and read-only.
 
 1. **"Is my financial advisor legit? Her name is Jane Smith, she's at Edward Jones in Texas."** — checks registration status, years of experience, and disclosure status, with FINRA BrokerCheck links to review the full record.
 2. **"Give me a full profile on the advisor with CRD 2827240."** — employment history, exams passed, state investment-adviser registrations, designations, and disclosure status.
-3. **"Tell me about Edward Jones as a firm — how big are they and what do they charge?"** — firm profile with AUM band, headcount, client types, and fee structure as filed in their ADV Part 2A brochure.
+3. **"Tell me about Edward Jones as a firm — how big are they and what do they charge?"** — firm profile with AUM band, headcount, fee arrangements, and fee structure as filed in their ADV Part 2A brochure.
 4. **"Find financial advisors in Austin, Texas."** — browse advisors by location, a starting point for choosing someone to interview.
 5. **"How current is your advisor data?"** — data vintages, coverage counts, and known limitations.
 6. **"Find a fee-only advisor near Austin I can actually book a call with"** — searches the AdvisorFinder marketplace for members you can view and contact directly, with regulatory facts for their CRD: the same registration and disclosure status as any other advisor when it's in our SEC dataset, or a labeled note (with verify links) when it isn't.
@@ -36,7 +36,7 @@ No account, no API key, no authentication — it's free and read-only.
 ## What's in the data
 
 - **416,000+ active investment adviser representatives** at SEC-registered firms, with employment history, exams, state investment-adviser registrations, and self-reported designations
-- **15,000+ SEC-registered advisory firms** — size, client types, fee arrangements, ADV-filed fee structures, branch locations, prior names
+- **15,000+ SEC-registered advisory firms** — size, fee arrangements, ADV-filed fee structures, branch locations, prior names
 - **16,000+ state-registered advisory firms** (reduced profiles)
 - **A few hundred of those advisors** are also listed on the AdvisorFinder marketplace, searchable directly via `find_bookable_advisors`
 - Four-state disclosure status per advisor, derived from the SEC roster flag
