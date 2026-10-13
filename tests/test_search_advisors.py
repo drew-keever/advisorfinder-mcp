@@ -335,7 +335,7 @@ def test_single_token_binds_last_name_tier_param(monkeypatch):
     db.search_advisors(name="smith", limit=5)
     (sql, params), = captured
     assert "CASE WHEN lower(last_name) = ?" in sql
-    assert "lower(first_name)" not in sql  # no tier 0 for one token
+    assert "lower(first_name) = ?" not in sql  # no tier 0 for one token (tie-break still uses lower(first_name))
     assert params[-2:] == ["smith", 5]
 
 
@@ -348,3 +348,10 @@ def test_ties_break_plain_name_before_middle_name_and_deterministically():
         [r["middle_name"] for r in smiths], key=lambda m: (bool(m), m or ""))
     assert [r["ind_source_id"] for r in rows] == [
         r["ind_source_id"] for r in db.search_advisors(name="smith", limit=10)]
+
+
+def test_tie_break_is_case_insensitive_and_orders_middle_flag_last():
+    from advisorfinder_mcp import db
+    tb = db._TIE_BREAK
+    assert tb.index("lower(last_name)") < tb.index("lower(first_name)") < tb.index("middle_name IS NOT NULL")
+    assert "lower(middle_name)" in tb and tb.endswith("ind_source_id")

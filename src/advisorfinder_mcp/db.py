@@ -26,12 +26,13 @@ def set_db_path(path) -> None:
     _meta_cache = None
 
 
-# Deterministic order inside a tier (and for the no-name path): a plain
+# Case-insensitive (production stores ~70% of names mixed case, and BINARY
+# collation sorts 'SMITH' before 'Smith'). Deterministic order inside a tier (and for the no-name path): a plain
 # "John Smith" with no middle name sorts before "John Q Smith"; ind_source_id
 # makes full ties stable.
 _TIE_BREAK = (
-    "last_name, first_name, (middle_name IS NOT NULL AND middle_name <> ''), "
-    "middle_name, ind_source_id"
+    "lower(last_name), lower(first_name), "
+    "(middle_name IS NOT NULL AND middle_name <> ''), lower(middle_name), ind_source_id"
 )
 
 
