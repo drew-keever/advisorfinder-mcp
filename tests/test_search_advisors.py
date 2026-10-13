@@ -209,12 +209,16 @@ def test_search_by_junior_does_not_match_suffixed_advisor():
 #    1000001 (JANE SMITH, non-member) and 1000002 (JOHN Q SMITH, marketplace
 #    member) share last name SMITH and both work at ALPHA WEALTH LLC/NEW
 #    YORK/NY -- searching "smith" hits both, ordered by last_name/first_name
-#    (JANE before JOHN) same as before enrichment existed. ───────────────────
+#    (JANE before JOHN) same as before enrichment existed. The name-ranking
+#    fixture advisors 1000015 BRENDAN JOHN SMITH (exact last name, sorts
+#    before JANE) and 1000016 JOHN SMITHSON (prefix-only match, always last)
+#    also match "smith". ───────────────────
 
 def test_search_advisors_ranking_unchanged_by_membership():
     result = server.search_advisors(name="smith")
     crds = [r["crd"] for r in result["results"]]
-    assert crds == ["1000001", "1000002"]  # pre-existing relevance order, pinned
+    # exact-last-name SMITHs alphabetically by first name, SMITHSON last
+    assert crds == ["1000015", "1000001", "1000002", "1000016"]
 
 
 def test_search_advisors_member_row_has_listing_block_nonmember_does_not():

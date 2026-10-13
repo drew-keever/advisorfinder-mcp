@@ -1,13 +1,13 @@
 {
   "schemaVersion": 4,
-  "generatedAt": "2026-08-28T04:39:07.390713+00:00",
+  "generatedAt": "2026-10-13T03:40:36.096257+00:00",
   "counts": {
     "firms": 3,
     "firms_state": 1,
-    "ia_rep_firms": 14,
-    "ia_reps": 13,
-    "iar_details": 9,
-    "iar_details_bc_counts": 9,
+    "ia_rep_firms": 16,
+    "ia_reps": 15,
+    "iar_details": 11,
+    "iar_details_bc_counts": 11,
     "advisor_employments": 4,
     "advisor_content": 2,
     "advisor_designations": 1,
@@ -24,7 +24,7 @@
     "individualsBulk": "2024-12-31"
   },
   "disclosureStatusTally": {
-    "none_reported": 9,
+    "none_reported": 11,
     "disclosed_no_detail": 2,
     "disclosed_with_detail": 1
   },
@@ -39,6 +39,6 @@
     "marketplaceIncluded": true
   },
   "employmentParseSkips": 0,
-  "sha256": "ddb89835128a429e8f9f41ff0c527d190ea359002e4529cdf2c8fc57a57bd165",
+  "sha256": "5ca78dad2634967cdcb87ed37675b6338b12133f30a95a9ed49b3146fd09aebd",
   "sizeBytes": 200704
 }

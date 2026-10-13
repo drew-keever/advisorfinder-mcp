@@ -34,6 +34,8 @@ Design notes (why the population looks the way it does):
     1000012 DANA PENDINGCE    has_disclosure='N', row exists            -> none_reported (IA states with a CE course outstanding)
     1000013 RILEY BROKERONLY  has_disclosure='N', row exists            -> none_reported (zero advisory states, 3 broker states)
     1000014 QUINN DUALJOB     has_disclosure='N', row exists            -> none_reported (one job returned twice, iaOnly Y + N)
+    1000015 BRENDAN JOHN SMITH  has_disclosure='N', row exists          -> none_reported (name-ranking: first BRENDAN, middle JOHN, last SMITH)
+    1000016 JOHN SMITHSON     has_disclosure='N', row exists            -> none_reported (name-ranking: prefix-only match for "smith", never a last-name match)
   JANE SMITH and JOHN SMITH share last name SMITH -> ambiguous check_advisor("smith").
   1000009 JOSÉ GARCÍA carries accented Latin characters specifically to exercise
   fts_query()'s diacritic-folding: the advisor_fts index is built with
@@ -433,6 +435,17 @@ def build_source_db(db_path: Path) -> Path:
     _insert(conn, "ia_reps", ind_source_id="1000014", first_name="QUINN",
             last_name="DUALJOB", ia_scope="Active", has_disclosure="N",
             branch_states='["FL"]', fetched_date="2026-05-20")
+    # 1000015/1000016: name-ranking cases. Search "john smith" must rank
+    # 1000002 JOHN SMITH (exact first+last) first, then 1000015 (last name
+    # matches, first name does not), then 1000016 (SMITHSON only matches the
+    # FTS prefix "smith*", so it is never a last-name match). Both carry
+    # has_disclosure='N' with an iar_details row -> none_reported.
+    _insert(conn, "ia_reps", ind_source_id="1000015", first_name="BRENDAN",
+            middle_name="JOHN", last_name="SMITH", ia_scope="Active",
+            has_disclosure="N", branch_states='["NY"]', fetched_date="2026-05-20")
+    _insert(conn, "ia_reps", ind_source_id="1000016", first_name="JOHN",
+            last_name="SMITHSON", ia_scope="Active", has_disclosure="N",
+            branch_states='["NY"]', fetched_date="2026-05-20")
 
     # ── ia_rep_firms: firm 100001 roster + firm 100002 roster; 1000005 at both;
     #    firm 100003 has NO rows at all -> empty-roster caveat vs its declared
@@ -483,6 +496,10 @@ def build_source_db(db_path: Path) -> Path:
     _insert(conn, "ia_rep_firms", ind_source_id="1000014", crd_number="100001",
             firm_name="ALPHA WEALTH LLC", branch_city="NAPLES", branch_state="FL",
             ia_only="Y")
+    for _ind in ("1000015", "1000016"):
+        _insert(conn, "ia_rep_firms", ind_source_id=_ind, crd_number="100001",
+                firm_name="ALPHA WEALTH LLC", branch_city="NEW YORK", branch_state="NY",
+                ia_only="Y")
 
     # ── iar_details: covers with_detail / no_detail / none_reported states.
     #    1000004/1000007/1000008 deliberately have NO row at all (see below) —
@@ -618,6 +635,18 @@ def build_source_db(db_path: Path) -> Path:
             raw_current_employments=DUAL_EMPLOYMENT_JSON,
             raw_previous_employments=None,
             raw_disclosures="[]", fetched_at="2026-08-17")
+    # 1000015/1000016: plain none_reported advisors for the name-ranking tests.
+    for _ind in ("1000015", "1000016"):
+        _insert(conn, "iar_details", ind_source_id=_ind, ia_scope="Active",
+                industry_start_date="2018-01-01", has_disclosure="N", ia_has_disclosure="N",
+                current_firm_id="100001", current_firm_name="ALPHA WEALTH LLC",
+                current_firm_since="2018-01-01", current_branch_city="NEW YORK",
+                current_branch_state="NY", prev_employment_count=0, state_exams="[]",
+                product_exams="[]", principal_exams="[]", registered_states="NY",
+                registered_states_ia="NY",
+                registered_states_scoped='[{"state":"NY","regScope":"IA","status":"APPROVED"}]',
+                disclosure_count=0, ia_disclosure_count=0, raw_current_employments=None,
+                raw_previous_employments=None, raw_disclosures=None, fetched_at="2026-05-20")
     # 1000004 (O'HEARN), 1000007 (UNKNOWNFLAG), 1000008 (NOROW): NO iar_details
     # row inserted for any of them, deliberately.
 
