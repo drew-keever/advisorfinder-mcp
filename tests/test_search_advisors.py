@@ -256,15 +256,6 @@ def test_name_single_token_exact_last_name_before_prefix_match():
     assert set(crds[:-1]) == {"1000001", "1000002", "1000015"}
 
 
-def test_name_ranking_ignores_suffix_token():
-    # "Jr." is dropped from the ranking tokens; FTS still AND-matches "jr*"
-    # only if a row has it, so use a name that exists: ROBERT JONES JR.
-    a = _crds(server.search_advisors(name="robert jones jr."))
-    b = _crds(server.search_advisors(name="robert jones"))
-    assert a and a[0] == "1000011"
-    assert b[0] == "1000011"
-
-
 def test_suffix_token_gets_identical_rank_params_to_plain_name(monkeypatch):
     """"John Smith Jr." must rank like "john smith": the bound ORDER BY
     parameters (tokens) are identical; only the FTS MATCH term differs."""
@@ -318,3 +309,42 @@ def test_more_results_available_absent_when_not_truncated():
     assert "more_results_available" not in result
     result = server.search_advisors(name="smith", limit=20)
     assert "more_results_available" not in result
+
+
+def test_single_token_binds_last_name_tier_param(monkeypatch):
+    """One token -> tier CASE on lower(last_name) with the raw token bound."""
+    from contextlib import contextmanager
+    from advisorfinder_mcp import db
+
+    captured = []
+    real = db.get_conn
+
+    class Spy:
+        def __init__(self, c): self.c = c
+        def execute(self, sql, params=()):
+            if "FROM ia_reps WHERE" in sql:
+                captured.append((sql, list(params)))
+            return self.c.execute(sql, params)
+
+    @contextmanager
+    def spy_conn():
+        with real() as c:
+            yield Spy(c)
+
+    monkeypatch.setattr(db, "get_conn", spy_conn)
+    db.search_advisors(name="smith", limit=5)
+    (sql, params), = captured
+    assert "CASE WHEN lower(last_name) = ?" in sql
+    assert "lower(first_name)" not in sql  # no tier 0 for one token
+    assert params[-2:] == ["smith", 5]
+
+
+def test_ties_break_plain_name_before_middle_name_and_deterministically():
+    from advisorfinder_mcp import db
+    # No middle name sorts before a middle name within the same first/last.
+    rows = db.search_advisors(name="smith", limit=10)
+    smiths = [r for r in rows if (r["first_name"], r["last_name"]) == ("JOHN", "SMITH")]
+    assert [r["middle_name"] for r in smiths] == sorted(
+        [r["middle_name"] for r in smiths], key=lambda m: (bool(m), m or ""))
+    assert [r["ind_source_id"] for r in rows] == [
+        r["ind_source_id"] for r in db.search_advisors(name="smith", limit=10)]

@@ -141,7 +141,9 @@ def search_advisors(
     city/state), a four-state disclosure status (none_reported /
     disclosed_no_detail / disclosed_with_detail / unknown — never "clean"),
     and a link to the advisor's full SEC IAPD record. Data is derived from SEC
-    IAPD / FINRA BrokerCheck registration feeds, not real-time.
+    IAPD / FINRA BrokerCheck registration feeds, not real-time. Exact name
+    matches rank first; `more_results_available` appears when more advisors
+    match than the limit returns.
     """
     if not any([name, firm, city, state]):
         return format.envelope({

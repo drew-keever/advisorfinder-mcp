@@ -26,6 +26,15 @@ def set_db_path(path) -> None:
     _meta_cache = None
 
 
+# Deterministic order inside a tier (and for the no-name path): a plain
+# "John Smith" with no middle name sorts before "John Q Smith"; ind_source_id
+# makes full ties stable.
+_TIE_BREAK = (
+    "last_name, first_name, (middle_name IS NOT NULL AND middle_name <> ''), "
+    "middle_name, ind_source_id"
+)
+
+
 @contextmanager
 def get_conn():
     """Read-only, immutable connection to DB_PATH. Raises RuntimeError if no
@@ -195,18 +204,18 @@ def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> li
         # parameters only): with >=2 tokens, 0 = exact first+last, 1 = exact
         # last, 2 = rest; with 1 token, 1 = exact last, 2 = rest. Without a
         # name (or with only suffix tokens) the order stays alphabetical.
-        order_by = "last_name, first_name"
+        order_by = _TIE_BREAK
         order_params: list = []
         rank_tokens = name_rank_tokens(name)
         if len(rank_tokens) >= 2:
             order_by = (
                 "CASE WHEN lower(first_name) = ? AND lower(last_name) = ? THEN 0 "
-                "WHEN lower(last_name) = ? THEN 1 ELSE 2 END, last_name, first_name"
+                "WHEN lower(last_name) = ? THEN 1 ELSE 2 END, " + _TIE_BREAK
             )
             order_params = [rank_tokens[0], rank_tokens[-1], rank_tokens[-1]]
         elif len(rank_tokens) == 1:
             order_by = (
-                "CASE WHEN lower(last_name) = ? THEN 1 ELSE 2 END, last_name, first_name"
+                "CASE WHEN lower(last_name) = ? THEN 1 ELSE 2 END, " + _TIE_BREAK
             )
             order_params = [rank_tokens[0]]
 

@@ -194,8 +194,12 @@ def test_check_no_more_candidates_flag_when_two_rows(monkeypatch):
     assert len(result["candidates"]) == 2
 
 
-def test_check_does_not_auto_select_when_six_rows(monkeypatch):
+def test_check_does_not_auto_select_single_exact_match(monkeypatch):
     from advisorfinder_mcp import db
-    monkeypatch.setattr(db, "search_advisors", lambda **kw: _fake_rows(6))
+    rows = _fake_rows(2)
+    rows[1]["first_name"] = "JANE"  # only rows[0] is an exact JOHN SMITH
+    monkeypatch.setattr(db, "search_advisors", lambda **kw: rows)
     result = server.check_advisor(name_or_crd="john smith")
-    assert "found" not in result or result.get("ambiguous") is True
+    assert result["ambiguous"] is True
+    assert len(result["candidates"]) == 2
+    assert "found" not in result
