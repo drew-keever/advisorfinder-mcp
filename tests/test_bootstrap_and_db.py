@@ -48,6 +48,10 @@ NO_MARKETPLACE_FIXTURE_DB = Path(__file__).parent / "fixtures" / "mcp_public_no_
 # above.
 _OTHER_WORKTREE = Path("/Users/lv/projects/advisorfinder/firm-intelligence")
 _OTHER_VENV_PYTHON = _OTHER_WORKTREE / ".venv-fixture" / "bin" / "python"
+# Upstream commit whose scripts/ built the committed fixtures. The fixtures and
+# this server are schema 4; upstream main moved to schema 5 (2026-09-28), so the
+# provenance build must not follow main. Move this pin when the server migrates.
+_UPSTREAM_FIXTURE_COMMIT = "dd63707"
 
 
 # ── bootstrap: MCP_DB_PATH short-circuit ─────────────────────────────────────
@@ -338,6 +342,23 @@ def test_marketplace_functions_graceful_absence_provenance_via_real_build_script
             "(see tests/fixtures/README.md to create it)"
         )
 
+    # Extract scripts/ as of the pinned commit (read-only git; no checkout).
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    try:
+        archive = subprocess.run(
+            ["git", "-C", str(_OTHER_WORKTREE), "archive", _UPSTREAM_FIXTURE_COMMIT, "scripts"],
+            check=True, capture_output=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        pytest.skip(
+            f"upstream repo {_OTHER_WORKTREE} or commit {_UPSTREAM_FIXTURE_COMMIT} "
+            f"unavailable: {exc}"
+        )
+    subprocess.run(
+        ["tar", "-x", "-C", str(upstream)], input=archive.stdout, check=True
+    )
+
     source_db = tmp_path / "fixture_source.db"
     subprocess.run(
         [sys.executable, str(FIXTURES_DIR / "make_fixture_source.py"), str(source_db)],
@@ -347,12 +368,12 @@ def test_marketplace_functions_graceful_absence_provenance_via_real_build_script
     subprocess.run(
         [
             str(_OTHER_VENV_PYTHON),
-            str(_OTHER_WORKTREE / "scripts" / "build_mcp_public_db.py"),
+            str(upstream / "scripts" / "build_mcp_public_db.py"),
             "--source", str(source_db),
             "--out", str(out_dir),
         ],
         check=True,
-        cwd=str(_OTHER_WORKTREE),
+        cwd=str(upstream),
     )
     no_marketplace_db = out_dir / "mcp_public.db"
     assert no_marketplace_db.exists()

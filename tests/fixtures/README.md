@@ -33,6 +33,26 @@ and on any machine. (A separate, clearly-skippable provenance test rebuilds
 an equivalent DB live via the real script, to prove this fixture's shape
 actually matches current script output — see that test's docstring.)
 
+## Pinned upstream commit (use `dd63707`, not main)
+
+Regenerate with the export script as of upstream commit `dd63707` until this
+server migrates to schema 5. Upstream main now exports `schema_version` 5 and
+needs a source table (`app_direct_household_gate_v1`) that
+`make_fixture_source.py` does not create. Extract the pinned scripts without
+touching the upstream checkout, and use them in place of its `scripts/`:
+
+```bash
+mkdir -p /tmp/upstream_dd63707
+git -C /Users/lv/projects/advisorfinder/firm-intelligence archive dd63707 scripts \
+  | tar -x -C /tmp/upstream_dd63707
+# then run /tmp/upstream_dd63707/scripts/build_mcp_public_db.py from that dir,
+# using the upstream .venv-fixture python.
+```
+
+The provenance test pins the same commit (`_UPSTREAM_FIXTURE_COMMIT` in
+`tests/test_bootstrap_and_db.py`). The commands below name the main checkout's
+script path; substitute the extracted copy.
+
 ## The other repo's location
 
 The REAL export script (`scripts/build_mcp_public_db.py`) lives in the
