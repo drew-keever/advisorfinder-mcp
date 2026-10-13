@@ -539,3 +539,43 @@ def test_merge_employments_single_flag_states_one_capacity():
                "end_date": None, "branch_city": "NY", "branch_state": "NY", "ia_only": "N"}]
     assert fmt.merge_employment_rows(adviser)[0]["capacity"] == "investment adviser"
     assert fmt.merge_employment_rows(broker)[0]["capacity"] == "broker-dealer"
+
+
+# ── name_rank_tokens ─────────────────────────────────────────────────────────
+
+def test_name_rank_tokens_basic_lowercases_and_splits():
+    assert fmt.name_rank_tokens("John Smith") == ["john", "smith"]
+
+
+def test_name_rank_tokens_folds_diacritics():
+    assert fmt.name_rank_tokens("José García") == ["jose", "garcia"]
+
+
+def test_name_rank_tokens_drops_suffix_tokens():
+    assert fmt.name_rank_tokens("John Smith Jr.") == ["john", "smith"]
+    assert fmt.name_rank_tokens("Smith III") == ["smith"]
+    assert fmt.name_rank_tokens("Smith iv") == ["smith"]
+    assert fmt.name_rank_tokens("Smith Sr") == ["smith"]
+    assert fmt.name_rank_tokens("Smith II") == ["smith"]
+
+
+def test_name_rank_tokens_suffix_only_is_empty():
+    assert fmt.name_rank_tokens("Jr") == []
+
+
+def test_name_rank_tokens_punctuation():
+    assert fmt.name_rank_tokens("O'Hearn") == ["o'hearn"]
+    assert fmt.name_rank_tokens("'John' -Smith-") == ["john", "smith"]
+    assert fmt.name_rank_tokens("John. Smith,") == ["john", "smith"]
+    assert fmt.name_rank_tokens("...") == []
+
+
+def test_name_rank_tokens_none_and_empty():
+    assert fmt.name_rank_tokens(None) == []
+    assert fmt.name_rank_tokens("") == []
+    assert fmt.name_rank_tokens("   ") == []
+
+
+def test_name_rank_tokens_uses_raw_tokens_not_fts_form():
+    # never the quoted/starred FTS form
+    assert all('"' not in t and "*" not in t for t in fmt.name_rank_tokens("john smi*"))

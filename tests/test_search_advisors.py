@@ -93,7 +93,8 @@ def test_search_limit_clamped_low(monkeypatch):
 
     monkeypatch.setattr(server.db, "search_advisors", fake_search_advisors)
     server.search_advisors(city="New York", state="NY", limit=0)
-    assert captured["limit"] == 1
+    # clamped to 1, plus the one extra row fetched to detect truncation
+    assert captured["limit"] == 1 + 1
 
 
 def test_search_limit_clamped_high(monkeypatch):
@@ -105,7 +106,8 @@ def test_search_limit_clamped_high(monkeypatch):
 
     monkeypatch.setattr(server.db, "search_advisors", fake_search_advisors)
     server.search_advisors(city="New York", state="NY", limit=999)
-    assert captured["limit"] == 50
+    # clamped to 50, plus the one extra row fetched to detect truncation
+    assert captured["limit"] == 50 + 1
 
 
 def test_search_fts_injection_input_returns_cleanly():
@@ -229,3 +231,90 @@ def test_search_advisors_member_row_has_listing_block_nonmember_does_not():
     assert listing["note"] == (
         "This advisor is listed on AdvisorFinder — view their full profile and contact them."
     )
+
+
+# ── name ranking + more-results signal ───────────────────────────────────────
+#    Fixture: 1000002 JOHN Q SMITH, 1000015 BRENDAN JOHN SMITH, 1000001 JANE
+#    SMITH, 1000016 JOHN SMITHSON (prefix-only match for "smith").
+
+def _crds(result):
+    return [r["crd"] for r in result["results"]]
+
+
+def test_name_two_tokens_exact_first_and_last_ranks_first():
+    # tier 0 JOHN SMITH, tier 1 other exact-last-name SMITHs, tier 2 SMITHSON.
+    # (Old ORDER BY last_name, first_name would give 1000015 first.)
+    crds = _crds(server.search_advisors(name="john smith"))
+    assert crds[0] == "1000002"
+    assert crds[1] == "1000015"
+    assert crds[-1] == "1000016"
+
+
+def test_name_single_token_exact_last_name_before_prefix_match():
+    crds = _crds(server.search_advisors(name="smith"))
+    assert crds.index("1000016") == len(crds) - 1
+    assert set(crds[:-1]) == {"1000001", "1000002", "1000015"}
+
+
+def test_name_ranking_ignores_suffix_token():
+    # "Jr." is dropped from the ranking tokens; FTS still AND-matches "jr*"
+    # only if a row has it, so use a name that exists: ROBERT JONES JR.
+    a = _crds(server.search_advisors(name="robert jones jr."))
+    b = _crds(server.search_advisors(name="robert jones"))
+    assert a and a[0] == "1000011"
+    assert b[0] == "1000011"
+
+
+def test_suffix_token_gets_identical_rank_params_to_plain_name(monkeypatch):
+    """"John Smith Jr." must rank like "john smith": the bound ORDER BY
+    parameters (tokens) are identical; only the FTS MATCH term differs."""
+    from advisorfinder_mcp import db
+
+    captured = []
+    real = db.get_conn
+
+    class Spy:
+        def __init__(self, c): self.c = c
+        def execute(self, sql, params=()):
+            if "FROM ia_reps WHERE" in sql:
+                captured.append((sql, list(params)))
+            return self.c.execute(sql, params)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def spy_conn():
+        with real() as c:
+            yield Spy(c)
+
+    monkeypatch.setattr(db, "get_conn", spy_conn)
+    db.search_advisors(name="John Smith Jr.", limit=5)
+    db.search_advisors(name="john smith", limit=5)
+    (sql_a, p_a), (sql_b, p_b) = captured
+    assert sql_a.split("ORDER BY")[1] == sql_b.split("ORDER BY")[1]
+    assert p_a[-4:] == p_b[-4:] == ["john", "smith", "smith", 5]
+
+
+def test_no_name_filter_keeps_alphabetical_order():
+    result = server.search_advisors(state="NY", limit=50)
+    rows = [(r["name"]) for r in result["results"]]
+    assert len(rows) >= 5
+    from advisorfinder_mcp import db
+    got = db.search_advisors(state="NY", limit=50)
+    keys = [(r["last_name"], r["first_name"]) for r in got]
+    assert keys == sorted(keys)
+
+
+def test_more_results_available_present_when_truncated():
+    result = server.search_advisors(name="smith", limit=2)
+    assert result["result_count"] == 2
+    assert result["more_results_available"] is True
+    assert "firm" in result["more_results_hint"].lower()
+
+
+def test_more_results_available_absent_when_not_truncated():
+    result = server.search_advisors(name="smith", limit=4)  # exactly 4 match
+    assert result["result_count"] == 4
+    assert "more_results_available" not in result
+    result = server.search_advisors(name="smith", limit=20)
+    assert "more_results_available" not in result

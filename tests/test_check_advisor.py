@@ -156,3 +156,46 @@ def test_check_advisor_nonmember_has_no_listing_block():
     result = server.check_advisor(name_or_crd="1000001")
     assert "advisorfinder_listing" not in result
     assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
+
+
+# ── more_candidates signal ───────────────────────────────────────────────────
+
+def _fake_rows(n):
+    return [
+        {
+            "ind_source_id": str(2000000 + i),
+            "first_name": "JOHN", "middle_name": None, "last_name": "SMITH",
+            "name_suffix": None, "has_disclosure": "N",
+            "firms": [{"crd_number": "100001", "firm_name": "ALPHA WEALTH LLC",
+                       "branch_city": "NEW YORK", "branch_state": "NY"}],
+            "iar_row": None,
+        }
+        for i in range(n)
+    ]
+
+
+def test_check_more_candidates_flag_when_six_rows(monkeypatch):
+    from advisorfinder_mcp import db
+    monkeypatch.setattr(db, "search_advisors", lambda **kw: _fake_rows(6))
+    result = server.check_advisor(name_or_crd="john smith")
+    assert result["ambiguous"] is True
+    assert result["more_candidates"] is True
+    assert len(result["candidates"]) == 5
+    assert "firm" in result["hint"] and "state" in result["hint"]
+    assert "more" in result["hint"].lower()
+
+
+def test_check_no_more_candidates_flag_when_two_rows(monkeypatch):
+    from advisorfinder_mcp import db
+    monkeypatch.setattr(db, "search_advisors", lambda **kw: _fake_rows(2))
+    result = server.check_advisor(name_or_crd="john smith")
+    assert result["ambiguous"] is True
+    assert "more_candidates" not in result
+    assert len(result["candidates"]) == 2
+
+
+def test_check_does_not_auto_select_when_six_rows(monkeypatch):
+    from advisorfinder_mcp import db
+    monkeypatch.setattr(db, "search_advisors", lambda **kw: _fake_rows(6))
+    result = server.check_advisor(name_or_crd="john smith")
+    assert "found" not in result or result.get("ambiguous") is True

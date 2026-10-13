@@ -323,6 +323,23 @@ def fts_query(raw: str | None) -> str | None:
     return " ".join(quoted)
 
 
+_NAME_SUFFIX_TOKENS = frozenset({"jr", "sr", "ii", "iii", "iv"})
+
+
+def name_rank_tokens(raw: str | None) -> list[str]:
+    """Raw (never FTS-quoted/starred) lowercase tokens used to rank advisor
+    name matches. Cleans `raw` the way fts_query() does (fold diacritics,
+    strip disallowed characters), splits on whitespace, strips leading and
+    trailing dots/apostrophes/hyphens from each token, drops empties, then
+    drops name-suffix tokens (jr/sr/ii/iii/iv) so "John Smith Jr." ranks as
+    "john smith". Pure; returns [] when nothing usable remains."""
+    if not raw:
+        return []
+    cleaned = _DISALLOWED_RE.sub(" ", _fold_diacritics(raw)).replace("_", " ").lower()
+    tokens = [t.strip(".'-") for t in cleaned.split()]
+    return [t for t in tokens if t and t not in _NAME_SUFFIX_TOKENS]
+
+
 # ── flexible date parsing (SEC data mixes ISO and M/D/YYYY) ──────────────────
 
 def parse_flexible_date(raw: str | None) -> date | None:

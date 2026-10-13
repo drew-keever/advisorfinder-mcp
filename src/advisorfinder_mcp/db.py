@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import SCHEMA_VERSION
-from .format import fts_query
+from .format import fts_query, name_rank_tokens
 
 # Set by bootstrap.ensure_db() (or directly by tests) before any query runs.
 DB_PATH: Path | None = None
@@ -137,6 +137,10 @@ def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> li
     per-advisor firm/iar_details fetches below, so those touch at most
     `limit` rows regardless of how large the underlying match set is.
 
+    Ordering: alphabetical (last_name, first_name) unless a `name` filter is
+    given, in which case exact-name matches rank first (see the tier comment
+    in the body) so a common name's real matches are not cut off by LIMIT.
+
     "Empty after sanitize = treat as absent" (per task-2-brief.md, stated for
     `name`) is applied uniformly to `firm` too, since both go through the same
     fts_query() sanitizer: a filter that sanitizes to nothing just drops that
@@ -186,11 +190,32 @@ def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> li
                 )
                 params.append(q)
 
+        # Name ranking applies only when a usable name filter was given. Tiers
+        # compare lower(first/last_name) to the RAW rank tokens (bound
+        # parameters only): with >=2 tokens, 0 = exact first+last, 1 = exact
+        # last, 2 = rest; with 1 token, 1 = exact last, 2 = rest. Without a
+        # name (or with only suffix tokens) the order stays alphabetical.
+        order_by = "last_name, first_name"
+        order_params: list = []
+        rank_tokens = name_rank_tokens(name)
+        if len(rank_tokens) >= 2:
+            order_by = (
+                "CASE WHEN lower(first_name) = ? AND lower(last_name) = ? THEN 0 "
+                "WHEN lower(last_name) = ? THEN 1 ELSE 2 END, last_name, first_name"
+            )
+            order_params = [rank_tokens[0], rank_tokens[-1], rank_tokens[-1]]
+        elif len(rank_tokens) == 1:
+            order_by = (
+                "CASE WHEN lower(last_name) = ? THEN 1 ELSE 2 END, last_name, first_name"
+            )
+            order_params = [rank_tokens[0]]
+
         sql = (
             "SELECT ind_source_id, first_name, middle_name, last_name, name_suffix, "
             "has_disclosure FROM ia_reps WHERE " + " AND ".join(where) + " "
-            "ORDER BY last_name, first_name LIMIT ?"
+            "ORDER BY " + order_by + " LIMIT ?"
         )
+        params.extend(order_params)
         params.append(limit)
 
         advisor_rows = conn.execute(sql, params).fetchall()

@@ -157,7 +157,10 @@ def search_advisors(
         return _unsanitizable_filter_error(*unsanitizable)
 
     clamped_limit = max(1, min(limit, 50))
-    rows = db.search_advisors(name=name, firm=firm, city=city, state=state, limit=clamped_limit)
+    # Fetch one extra row so truncation is detectable without a second query.
+    rows = db.search_advisors(name=name, firm=firm, city=city, state=state, limit=clamped_limit + 1)
+    more_results = len(rows) > clamped_limit
+    rows = rows[:clamped_limit]
 
     results = []
     for r in rows:
@@ -191,6 +194,11 @@ def search_advisors(
         results.append(entry)
 
     payload = {"result_count": len(results), "results": results}
+    if more_results:
+        payload["more_results_available"] = True
+        payload["more_results_hint"] = (
+            "More advisors matched than are shown. Narrow the search by firm, city, or state."
+        )
     if not results:
         payload["not_found_guidance"] = (
             "No advisors matched your search. Try a different spelling, just "
@@ -403,14 +411,18 @@ def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None =
                 "name": _full_name(r["first_name"], r["middle_name"], r["last_name"], r["name_suffix"]),
                 "firm": format.title_case_firm_name(firm_name) if firm_name else None,
             })
-        return format.envelope(
-            {
-                "ambiguous": True,
-                "candidates": candidates,
-                "hint": "Multiple advisors matched — re-run check_advisor with the CRD from one of these candidates.",
-            },
-            verify=format.name_search_urls(name_or_crd),
-        )
+        payload = {
+            "ambiguous": True,
+            "candidates": candidates,
+            "hint": "Multiple advisors matched — re-run check_advisor with the CRD from one of these candidates.",
+        }
+        if len(rows) > 5:
+            payload["more_candidates"] = True
+            payload["hint"] = (
+                "More advisors matched than are listed. Add a firm or state to narrow the "
+                "search, or re-run check_advisor with the CRD from one of these candidates."
+            )
+        return format.envelope(payload, verify=format.name_search_urls(name_or_crd))
 
     crd = rows[0]["ind_source_id"]
     bundle = db.get_advisor(crd)
