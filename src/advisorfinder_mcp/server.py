@@ -1,28 +1,55 @@
-"""AdvisorFinder MCP server: 6 consumer-facing tools over a local scrubbed
+"""AdvisorFinder MCP server: 7 consumer-facing tools over a local scrubbed
 SQLite export (mcp_public.db). Every response funnels back to
 advisorfinder.com via format.envelope(); disclosure status is always one of
 the four honest states (never phrased as "clean"/"safe"); designations are
 always labeled self-reported.
 
-Tool functions are plain module-level functions decorated with @mcp.tool.
-On fastmcp 3.4.6, `@mcp.tool` returns the original function object unchanged
-(verified: `mcp.tool(fn) is fn`) — the FunctionTool wrapper is registered
-internally and reachable via `await mcp.get_tool(name)`, but the name in this
-module's namespace still refers to the plain function. Tests therefore import
+Tool functions are plain module-level functions decorated with
+`@mcp.tool(title=..., annotations=...)`. On fastmcp 3.4.x, the decorator
+(bare or parametrized) returns the original function object unchanged
+(verified: `mcp.tool(fn) is fn` and `mcp.tool(title=...)(fn) is fn`) — the
+FunctionTool wrapper is registered internally and reachable via
+`await mcp.get_tool(name)`, but the name in this module's namespace still
+refers to the plain function. Tests therefore import
 and call these functions directly (e.g. `server.search_advisors(...)`) with
 no `.fn` indirection needed.
 """
-import json
-import os
+import time
 
-from fastmcp import FastMCP
-from starlette.requests import Request
-from starlette.responses import JSONResponse
+# Taken before the heavy fastmcp/mcp imports so main()'s boot log can show
+# how long module import itself took.
+_IMPORT_T0 = time.monotonic()
 
-from . import bootstrap, db, format, resources
+import json  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+import sys  # noqa: E402
+
+from fastmcp import FastMCP  # noqa: E402
+from mcp.types import ToolAnnotations  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
+
+from . import bootstrap, db, format, resources  # noqa: E402
+
+# Named explicitly: under `python -m`, __name__ is "__main__".
+log = logging.getLogger("advisorfinder_mcp.server")
 
 mcp = FastMCP("advisorfinder")
 resources.register(mcp)
+
+
+def _read_only(title: str) -> ToolAnnotations:
+    """MCP tool annotations shared by every tool: all 7 are pure lookups
+    against a local, read-only SQLite export — no writes, no side effects,
+    same answer for the same input, and no calls out to external systems."""
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -124,7 +151,7 @@ def _json_list(raw) -> list:
     return data if isinstance(data, list) else []
 
 
-@mcp.tool
+@mcp.tool(title="Search advisors", annotations=_read_only("Search advisors"))
 def search_advisors(
     name: str | None = None,
     firm: str | None = None,
@@ -214,7 +241,7 @@ def search_advisors(
     return format.envelope(payload, verify=format.name_search_urls(name or firm or ""))
 
 
-@mcp.tool
+@mcp.tool(title="Get advisor profile", annotations=_read_only("Get advisor profile"))
 def get_advisor(crd: str) -> dict:
     """Get the full profile for an investment adviser representative (IAR) by
     CRD number — no need to search first if you already have it. Returns
@@ -361,7 +388,7 @@ def _check_verdict(crd: str, bundle: dict) -> dict:
     )
 
 
-@mcp.tool
+@mcp.tool(title="Check an advisor", annotations=_read_only("Check an advisor"))
 def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None = None) -> dict:
     """Quick yes/no-style verification of an advisor: is their registration
     active, which states they hold an investment-adviser registration in
@@ -468,7 +495,7 @@ def _regulatory_join(crd: str) -> tuple[dict, dict]:
     return registration, disclosure
 
 
-@mcp.tool
+@mcp.tool(title="Find bookable advisors", annotations=_read_only("Find bookable advisors"))
 def find_bookable_advisors(
     specialty: str | None = None,
     city: str | None = None,
@@ -557,7 +584,7 @@ def find_bookable_advisors(
     return format.envelope(payload)
 
 
-@mcp.tool
+@mcp.tool(title="Search firms", annotations=_read_only("Search firms"))
 def search_firms(name: str | None = None, state: str | None = None, limit: int = 20) -> dict:
     """Search SEC- and state-registered investment adviser FIRMS by name
     and/or state. Matches on the firm's primary name, legal name, or any
@@ -608,7 +635,7 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     return format.envelope(payload, verify=verify)
 
 
-@mcp.tool
+@mcp.tool(title="Get firm profile", annotations=_read_only("Get firm profile"))
 def get_firm(crd: str) -> dict:
     """Get the full profile for an investment adviser FIRM by CRD number:
     identity, address, website, AUM band, headcount, how they charge
@@ -725,7 +752,7 @@ def get_firm(crd: str) -> dict:
     return format.envelope(payload, caveats=caveats, verify=_firm_verify_links(crd))
 
 
-@mcp.tool
+@mcp.tool(title="Get database stats", annotations=_read_only("Get database stats"))
 def get_database_stats() -> dict:
     """Overall stats about our data: how many firms and advisors we cover,
     when each data source was last refreshed (vintages), and a full
@@ -794,8 +821,26 @@ def main() -> None:
     streamable HTTP. This is what the Dockerfile's CMD runs
     (`python -m advisorfinder_mcp.server`); the PyPI package's console
     script is a different entry point — see proxy.py."""
-    bootstrap.ensure_db()
-    mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    # INFO only for this package's own loggers; the root stays at WARNING so
+    # third-party INFO lines (httpx/botocore request logs, which can carry
+    # URLs) are not turned on as a side effect.
+    logging.basicConfig(
+        level=logging.WARNING,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("advisorfinder_mcp").setLevel(logging.INFO)
+    t0 = time.monotonic()
+    log.info(
+        "[boot +0.0s] start (module import took %.1fs)", t0 - _IMPORT_T0
+    )
+    db_path = bootstrap.ensure_db()
+    port = int(os.environ.get("PORT", 8080))
+    log.info(
+        "[boot +%.1fs] DB ready (%s); server starting on 0.0.0.0:%d",
+        time.monotonic() - t0, db_path, port,
+    )
+    mcp.run(transport="http", host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":

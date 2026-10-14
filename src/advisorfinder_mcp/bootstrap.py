@@ -22,16 +22,31 @@ has no boto3 dependency and never calls ensure_db() at all, so a module-level
 Any integrity failure (sha256 mismatch, size mismatch, schema version
 mismatch) raises RuntimeError and leaves no half-verified file in place —
 the server must not start against unverified or wrong-schema data.
+
+Every phase logs one INFO line on the `advisorfinder_mcp.bootstrap` logger
+with elapsed seconds since ensure_db() started (Render showed ~9 silent
+minutes before uvicorn bound its port; these lines say which step is slow).
+Log lines carry only bucket/key names, sizes and timings — never
+credentials, the account ID, or any URL.
 """
 import hashlib
 import json
+import logging
 import os
+import time
 from pathlib import Path
 
 from . import SCHEMA_VERSION, db
 
+log = logging.getLogger(__name__)
+
 # Streamed download chunk size (8 MiB).
 _CHUNK_SIZE = 8 * 1024 * 1024
+
+# Log download progress every this many bytes (not per chunk).
+_PROGRESS_EVERY = 64 * 1024 * 1024
+
+_MIB = 1024 * 1024
 
 _DEFAULT_BUCKET = "advisorfinder-mcp"
 _DEFAULT_DB_KEY = "mcp_public.db"  # default remote object key (R2_DB_KEY overrides)
@@ -79,10 +94,19 @@ def ensure_db(client=None) -> Path:
     client built from the R2_* env vars. Tests inject a fake to exercise the
     download/verify logic with zero network and zero boto3 dependency.
     """
+    t0 = time.monotonic()
+
+    def _log(msg, *args):
+        log.info("[bootstrap +%.1fs] " + msg, time.monotonic() - t0, *args)
+
+    _log("start")
     mcp_db_path = os.environ.get("MCP_DB_PATH")
     if mcp_db_path and Path(mcp_db_path).exists():
+        _log("using local MCP_DB_PATH (no download)")
         db.set_db_path(mcp_db_path)
+        _log("schema check start")
         db.assert_schema_version()
+        _log("schema check ok (schema_version=%d); DB ready", SCHEMA_VERSION)
         return Path(mcp_db_path)
 
     creds = _require_r2_env()
@@ -96,6 +120,7 @@ def ensure_db(client=None) -> Path:
             creds["R2_ACCOUNT_ID"], creds["R2_ACCESS_KEY_ID"], creds["R2_SECRET_ACCESS_KEY"]
         )
 
+    _log("manifest fetch start (bucket=%s key=%s)", bucket, manifest_key)
     manifest_obj = client.get_object(Bucket=bucket, Key=manifest_key)
     try:
         manifest = json.loads(manifest_obj["Body"].read())
@@ -104,6 +129,10 @@ def ensure_db(client=None) -> Path:
         manifest_schema_version = int(manifest["schemaVersion"])
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise RuntimeError(f"corrupt or incomplete manifest.json: {exc!r}") from exc
+    _log(
+        "manifest fetched (sizeBytes=%d, %.1f MiB, schemaVersion=%d)",
+        expected_size, expected_size / _MIB, manifest_schema_version,
+    )
 
     # Fail fast, before ever touching the DB object: a manifest whose own
     # declared schemaVersion doesn't match this server means the export is
@@ -127,11 +156,17 @@ def ensure_db(client=None) -> Path:
         and sidecar_path.read_text().strip() == expected_sha
     )
 
-    if not reused:
+    if reused:
+        _log("local cache hit: %s matches manifest sha256; skipping download", final_path)
+    else:
+        _log("local cache miss: downloading (bucket=%s key=%s)", bucket, db_key)
+        dl_start = time.monotonic()
         obj = client.get_object(Bucket=bucket, Key=db_key)
+        _log("download start (response headers received)")
         body = obj["Body"]
         hasher = hashlib.sha256()
         size = 0
+        next_progress = _PROGRESS_EVERY
         try:
             with open(tmp_path, "wb") as f:
                 while True:
@@ -141,7 +176,23 @@ def ensure_db(client=None) -> Path:
                     hasher.update(chunk)
                     size += len(chunk)
                     f.write(chunk)
+                    if size >= next_progress:
+                        pct = 100.0 * size / expected_size if expected_size else 0.0
+                        _log(
+                            "download progress %.0f/%.0f MiB (%.0f%%)",
+                            size / _MIB, expected_size / _MIB, pct,
+                        )
+                        next_progress = (size // _PROGRESS_EVERY + 1) * _PROGRESS_EVERY
 
+            dl_secs = time.monotonic() - dl_start
+            _log(
+                "download done (%d bytes, %.1f MiB in %.1fs, %.1f MiB/s)",
+                size, size / _MIB, dl_secs, (size / _MIB) / dl_secs if dl_secs else 0.0,
+            )
+            # sha256 is computed incrementally while streaming; this step
+            # only finalizes the digest and compares it with the manifest.
+            verify_start = time.monotonic()
+            _log("sha256 verify start (digest computed during download)")
             actual_sha = hasher.hexdigest()
             if actual_sha != expected_sha or size != expected_size:
                 raise RuntimeError(
@@ -149,6 +200,7 @@ def ensure_db(client=None) -> Path:
                     f"sha256={actual_sha} (expected {expected_sha}), "
                     f"size={size} (expected {expected_size})"
                 )
+            _log("sha256 verify ok (%.1fs)", time.monotonic() - verify_start)
             os.replace(tmp_path, final_path)
         except Exception:
             if tmp_path.exists():
@@ -167,7 +219,13 @@ def ensure_db(client=None) -> Path:
     # without ever re-checking it.
     try:
         db.set_db_path(final_path)
+        schema_start = time.monotonic()
+        _log("schema check start")
         db.assert_schema_version()
+        _log(
+            "schema check ok (schema_version=%d, %.1fs)",
+            SCHEMA_VERSION, time.monotonic() - schema_start,
+        )
     except Exception:
         if final_path.exists():
             final_path.unlink()
@@ -182,4 +240,5 @@ def ensure_db(client=None) -> Path:
     if not reused:
         sidecar_path.write_text(expected_sha)
 
+    _log("DB ready at %s", final_path)
     return final_path

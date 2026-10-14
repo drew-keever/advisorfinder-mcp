@@ -289,3 +289,74 @@ def test_ensure_db_mcp_db_path_short_circuits_before_touching_r2(monkeypatch, r2
 
     assert path == FIXTURE_DB
     assert db.DB_PATH == FIXTURE_DB
+
+
+# ── start-up phase logging ──────────────────────────────────────────────────────
+
+def _bootstrap_messages(caplog):
+    return [
+        r.getMessage() for r in caplog.records
+        if r.name == "advisorfinder_mcp.bootstrap"
+    ]
+
+
+def test_ensure_db_logs_each_download_phase_without_secrets(r2_env, monkeypatch, caplog):
+    # Small progress interval + chunk size so the ~200 KB fixture produces
+    # several progress lines (production: every 64 MiB, 8 MiB chunks).
+    monkeypatch.setattr(bootstrap, "_CHUNK_SIZE", 16 * 1024)
+    monkeypatch.setattr(bootstrap, "_PROGRESS_EVERY", 64 * 1024)
+    client = FakeS3Client({
+        "manifest.json": _manifest_bytes(),
+        "mcp_public.db": FIXTURE_BYTES,
+    })
+
+    with caplog.at_level("INFO", logger="advisorfinder_mcp.bootstrap"):
+        bootstrap.ensure_db(client=client)
+
+    msgs = _bootstrap_messages(caplog)
+    joined = "\n".join(msgs)
+    expected_phases = [
+        "start",
+        "manifest fetch start",
+        "manifest fetched",
+        "local cache miss",
+        "download start",
+        "download progress",
+        "download done",
+        "sha256 verify start",
+        "sha256 verify ok",
+        "schema check start",
+        "schema check ok",
+        "DB ready",
+    ]
+    # Phases appear in order, each line prefixed with elapsed seconds.
+    pos = 0
+    for phase in expected_phases:
+        idx = next(
+            (i for i, m in enumerate(msgs[pos:], start=pos) if phase in m), None
+        )
+        assert idx is not None, f"missing/out-of-order phase {phase!r}:\n{joined}"
+        pos = idx
+    assert all(m.startswith("[bootstrap +") for m in msgs)
+    # Progress is throttled (every 64 KiB here), not one line per 16 KiB chunk.
+    progress = [m for m in msgs if "download progress" in m]
+    assert 1 <= len(progress) <= FIXTURE_SIZE // (64 * 1024)
+    assert f"{FIXTURE_SIZE} bytes" in joined
+    for secret in R2_ENV.values():
+        assert secret not in joined
+    assert "http" not in joined
+
+
+def test_ensure_db_logs_cache_hit_on_reuse(r2_env, caplog):
+    db_dir = r2_env
+    (db_dir / "mcp_public.db").write_bytes(FIXTURE_BYTES)
+    (db_dir / "mcp_public.db.sha256").write_text(FIXTURE_SHA)
+    client = FakeS3Client({"manifest.json": _manifest_bytes()})
+
+    with caplog.at_level("INFO", logger="advisorfinder_mcp.bootstrap"):
+        bootstrap.ensure_db(client=client)
+
+    joined = "\n".join(_bootstrap_messages(caplog))
+    assert "local cache hit" in joined
+    assert "download start" not in joined
+    assert "DB ready" in joined
