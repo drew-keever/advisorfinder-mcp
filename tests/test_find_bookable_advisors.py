@@ -232,3 +232,134 @@ def test_find_bookable_advisors_graceful_when_marketplace_absent():
         assert result["result_count"] == 0
     finally:
         db.set_db_path(original_path)
+
+
+# ── production-shaped rows: DynamoDB JSON + mojibake are cleaned on output ───
+# The fixture's marketplace rows hold plain text, but production rows hold
+# DynamoDB attribute-value JSON and some mojibake. These tests feed a row in
+# the production shape through the real tool code (db.search_marketplace and
+# db.get_marketplace_by_crd are monkeypatched; the .db files are untouched).
+import json  # noqa: E402
+import re  # noqa: E402
+
+_PROD_SHAPED_ROW = {
+    "crd": "1000002",
+    "displayName": "John Q. Smith",
+    "companyName": "Alpha Wealth LLC",
+    "jobTitle": "CERTIFIED FINANCIAL PLANNERÂ® Advisor",
+    "city": "New York",
+    "state": "NY",
+    "bio": "ðŸ‘‹ Iâ€™m John, a CFPÂ® professional.",
+    "credentials": json.dumps([
+        {"M": {"acronym": {"S": "CFA"}, "value": {"S": "Chartered Financial Analyst"},
+               "description": {"S": "Generic copy."}, "requirements": {"S": "Exams."},
+               "quickFact": {"S": "Fact."}, "sortingPriority": {"N": "1"}, "id": {"N": "3"}}},
+        {"M": {"acronym": {"S": "CFP®"}, "value": {"S": "Certified Financial Planner™"},
+               "description": {"S": "A CFP professional is bound to be a fiduciary."},
+               "requirements": {"S": "Exams."}, "quickFact": {"S": "Fact."},
+               "sortingPriority": {"N": "0"}, "id": {"S": "1"}}},
+    ]),
+    "clientDescription": "Pre-retirees â€” and families.",
+    "quickFacts": json.dumps([{"S": "aum"}, {"S": "averageAccountSize"}]),
+    "pricing": json.dumps([
+        {"M": {"typeName": {"S": "AUM"}, "minRange": {"S": "0.50"}, "maxRange": {"S": "1.00"}}},
+        {"M": {"typeName": {"S": "HOURLY"}, "rate": {"S": "250"}}},
+    ]),
+    "minAccountSize": 250000.0,
+    "yearsOfExperience": 15,
+    "virtualMeetingsOffered": None,
+    "allowedStates": json.dumps([{"S": "NY"}, {"S": "NJ"}]),
+    "memberSince": "2022-03-01",
+    "advisorWebsiteURL": None,
+    "linkedInURL": None,
+    "twitterURL": None,
+    "bioVideoLink": None,
+    "education": json.dumps([
+        {"M": {"institution": {"S": "NYU"}, "degreeObtained": {"S": "MBA"},
+               "completedDate": {"S": "Fri May 15 2009 04:00:00 GMT+0000 (Coordinated Universal Time)"},
+               "educationId": {"S": "e1"}}},
+    ]),
+    "aum": 45000000.0,
+    "clientNumber": 120,
+    "in_their_own_words": json.dumps(["Lucasâ€™s â€œfun timeâ€\x9d is sailing."]),
+    "profile_url": "https://advisorfinder.com/app/advisor-profile/qv3Y1g3y/john-q-smith",
+}
+
+_RAW_OR_GARBLED = re.compile(r'\{"S":|\{"M":|"N":|Ã|â€|ðŸ|Â®')
+
+
+def test_find_bookable_cleans_production_shaped_row(monkeypatch):
+    monkeypatch.setattr(db, "search_marketplace", lambda **kw: [_PROD_SHAPED_ROW])
+    result = server.find_bookable_advisors()
+    entry = result["results"][0]
+    assert entry["credentials"] == [
+        {"acronym": "CFP®", "name": "Certified Financial Planner™", "status": "self-reported"},
+        {"acronym": "CFA", "name": "Chartered Financial Analyst", "status": "self-reported"},
+    ]
+    assert entry["education"] == [{"institution": "NYU", "degree": "MBA", "year": 2009}]
+    assert entry["pricing"] == [
+        {"type": "aum", "min": "0.50", "max": "1.00", "unit": "percent of assets"},
+        {"type": "hourly", "rate": "250"},
+    ]
+    assert entry["allowed_states"] == ["NY", "NJ"]
+    assert "quick_facts" not in entry
+    assert entry["bio"] == "👋 I’m John, a CFP® professional."
+    assert entry["client_description"] == "Pre-retirees — and families."
+    assert entry["job_title"] == "CERTIFIED FINANCIAL PLANNER® Advisor"
+    assert entry["in_their_own_words"] == ["Lucas’s “fun time” is sailing."]
+    # The listing labels are still there.
+    assert entry["note"] == format._MARKETPLACE_NOTE
+    assert entry["self_reported"]["label"] == format.SELF_REPORTED_LABEL
+    dumped = json.dumps(entry, ensure_ascii=False)
+    assert not _RAW_OR_GARBLED.search(dumped)
+    assert "fiduciary" not in dumped
+
+
+def test_get_advisor_listing_pricing_is_cleaned(monkeypatch):
+    monkeypatch.setattr(db, "get_marketplace_by_crd", lambda crd: _PROD_SHAPED_ROW)
+    listing = server.get_advisor(crd="1000002")["advisorfinder_listing"]
+    assert listing["pricing"][0] == {"type": "aum", "min": "0.50", "max": "1.00", "unit": "percent of assets"}
+    assert listing["job_title"] == "CERTIFIED FINANCIAL PLANNER® Advisor"
+
+
+def test_specialty_matches_credential_acronym():
+    # Fixture credentials are plain text ("CFP, CFA" / "CFP"); "cfp" must
+    # still find every CFP holder, case-insensitively.
+    crds = {r["crd"] for r in server.find_bookable_advisors(specialty="cfp")["results"]}
+    assert crds == {"1000002", "1000010"}
+
+
+def test_specialty_ignores_generic_credential_copy_and_json_keys(monkeypatch, tmp_path):
+    # The real db.search_marketplace filter over a throwaway DB (in tmp_path,
+    # NOT the committed fixtures) holding one production-shaped row: the old
+    # SQL LIKE over raw JSON matched "fiduciary" through the generic CFP
+    # description, and matched JSON keys such as "acronym".
+    import sqlite3
+
+    path = tmp_path / "prod_shaped.db"
+    conn = sqlite3.connect(path)
+    cols = list(_PROD_SHAPED_ROW)
+    conn.execute(f"CREATE TABLE marketplace_advisors ({', '.join(cols)})")
+    conn.execute(
+        f"INSERT INTO marketplace_advisors VALUES ({', '.join('?' * len(cols))})",
+        [_PROD_SHAPED_ROW[c] for c in cols],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+
+    def crds(specialty):
+        return [r["crd"] for r in db.search_marketplace(specialty=specialty)]
+
+    for needle in ("fiduciary", "acronym", "sortingPriority", '{"S"', "Generic copy", "averageAccountSize"):
+        assert crds(needle) == [], needle
+    for needle in ("CFP", "certified financial planner", "Lucas’s", "pre-retirees"):
+        assert crds(needle) == ["1000002"], needle
+
+
+def test_specialty_limit_applies_after_filter():
+    # "cfp" matches 1000002 and 1000010; limit=1 returns the first by
+    # displayName among the MATCHES, not the first row overall (1000003,
+    # "Mary Jones", sorts between them and has no credentials).
+    rows = db.search_marketplace(specialty="cfp", limit=1)
+    assert [r["crd"] for r in rows] == ["1000002"]

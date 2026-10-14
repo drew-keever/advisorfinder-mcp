@@ -11,6 +11,8 @@ import urllib.parse
 from datetime import date, datetime
 from typing import Any
 
+import ftfy
+
 
 def advisorfinder_url() -> str:
     return "https://advisorfinder.com"
@@ -236,10 +238,275 @@ def marketplace_block(row: Any) -> dict:
     listing from reading as an endorsement."""
     return {
         "profile_url": _row_value(row, "profile_url"),
-        "job_title": _row_value(row, "jobTitle"),
-        "pricing": _row_value(row, "pricing"),
+        "job_title": clean_text(_row_value(row, "jobTitle")),
+        "pricing": marketplace_pricing(_row_value(row, "pricing")),
         "note": _MARKETPLACE_NOTE,
     }
+
+
+# ── marketplace field cleanup (presentation layer only) ──────────────────────
+# The marketplace export carries two upstream defects that the server repairs
+# on output (no data refresh is possible at schema 4):
+#   1. Mojibake: UTF-8 text that was decoded as cp1252 upstream ("â€™" for
+#      "’", "CFPÂ®" for "CFP®", "ðŸ‘‹" for "👋"). clean_text() repairs it.
+#   2. DynamoDB attribute-value JSON in credentials/education/pricing/
+#      allowedStates/quickFacts ([{"M": {"acronym": {"S": "CFP®"}}}]).
+#      unwrap_dynamodb() plus the marketplace_* builders below turn it into
+#      plain values.
+# Every builder also accepts plain text (the test fixture, and any future
+# export that ships clean values) and passes it through unchanged except for
+# clean_text().
+
+
+def clean_text(value):
+    """Repairs mojibake in a string; returns anything else unchanged.
+
+    Uses ftfy.fix_encoding ONLY -- not ftfy.fix_text, which also uncurls
+    quotes, NFC-normalizes and rewrites control characters, and so would
+    change text that is already correct. fix_encoding changes a string only
+    when it detects a mis-decoding, so correct ®, ’, é and emoji pass through
+    byte-identical (verified on all 294 production marketplace rows)."""
+    if not isinstance(value, str) or not value:
+        return value
+    try:
+        return ftfy.fix_encoding(value)
+    except Exception:  # never let a text repair break a tool response
+        return value
+
+
+_AV_TYPES = frozenset({"S", "N", "BOOL", "NULL", "M", "L", "SS", "NS"})
+
+
+def _unwrap_av(value):
+    if isinstance(value, list):
+        return [_unwrap_av(v) for v in value]
+    if not isinstance(value, dict):
+        return value
+    if len(value) == 1:
+        (tag, inner), = value.items()
+        if tag in _AV_TYPES:
+            if tag == "S":
+                return inner if isinstance(inner, str) else None
+            if tag == "N":
+                # Kept as the listed string ("0.50" stays "0.50"): no numeric
+                # normalization of advisor-entered values.
+                if isinstance(inner, bool) or not isinstance(inner, (str, int, float)):
+                    return None
+                return str(inner)
+            if tag == "BOOL":
+                return inner if isinstance(inner, bool) else None
+            if tag == "NULL":
+                return None
+            if tag == "M":
+                return {k: _unwrap_av(v) for k, v in inner.items()} if isinstance(inner, dict) else None
+            if tag == "L":
+                return [_unwrap_av(v) for v in inner] if isinstance(inner, list) else None
+            # SS / NS: sets of plain strings / number-strings.
+            if not isinstance(inner, list):
+                return None
+            return [str(v) for v in inner if isinstance(v, (str, int, float)) and not isinstance(v, bool)]
+    return {k: _unwrap_av(v) for k, v in value.items()}
+
+
+def unwrap_dynamodb(value):
+    """Converts DynamoDB attribute-value JSON to plain Python values.
+
+    Accepts a JSON string or an already-parsed value. Handles S, N (kept as a
+    string), BOOL, NULL, M, L, SS and NS at any depth; a dict that is not a
+    single-key attribute value is treated as plain JSON and its values are
+    unwrapped. A string that is not JSON is returned as-is (plain text).
+    Never raises: malformed input returns None."""
+    try:
+        if isinstance(value, (bytes, bytearray)):
+            value = value.decode("utf-8", errors="replace")
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            if stripped[0] in "[{":
+                try:
+                    value = json.loads(stripped)
+                except (json.JSONDecodeError, ValueError):
+                    return value  # looks like JSON but is not: plain text
+            else:
+                return value
+        return _unwrap_av(value)
+    except Exception:
+        return None
+
+
+def _text_or_none(value) -> str | None:
+    """A non-empty, mojibake-repaired, stripped string, or None."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str):
+        return None
+    value = clean_text(value).strip()
+    return value or None
+
+
+def marketplace_credentials(raw):
+    """[{"acronym", "name", "status": "self-reported"}, ...] sorted by the
+    profile's sortingPriority, from the marketplace credentials column.
+
+    The generic description/requirements/quickFact copy that rides along with
+    each credential is dropped on purpose: it is AdvisorFinder marketing text
+    about the credential in general, not a fact about this advisor. Entries
+    with neither an acronym nor a name (bare catalog ids) carry nothing a
+    consumer can use and are skipped. Plain text is returned as (repaired)
+    text; None when absent or unreadable."""
+    data = unwrap_dynamodb(raw)
+    if isinstance(data, str):
+        return _text_or_none(data)
+    if not isinstance(data, list):
+        return None
+    keyed = []
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
+            text = _text_or_none(item)
+            if text:
+                keyed.append((float("inf"), index, {"acronym": None, "name": text, "status": "self-reported"}))
+            continue
+        acronym = _text_or_none(item.get("acronym"))
+        name = _text_or_none(item.get("value"))
+        if not acronym and not name:
+            continue
+        try:
+            priority = float(item.get("sortingPriority"))
+        except (TypeError, ValueError):
+            priority = float("inf")
+        keyed.append((priority, index, {"acronym": acronym, "name": name, "status": "self-reported"}))
+    keyed.sort(key=lambda t: (t[0], t[1]))
+    return [entry for _, _, entry in keyed]
+
+
+_YEAR_RE = re.compile(r"(?<!\d)(19|20)\d{2}(?!\d)")
+
+
+def marketplace_education(raw):
+    """[{"institution", "degree", "year"}, ...] from the marketplace
+    education column. `year` is the 4-digit year found in completedDate
+    ("Fri May 15 2009 04:00:00 GMT+0000 ..." -> 2009), or None when there is
+    no date -- never guessed. Plain text is returned as (repaired) text."""
+    data = unwrap_dynamodb(raw)
+    if isinstance(data, str):
+        return _text_or_none(data)
+    if not isinstance(data, list):
+        return None
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        institution = _text_or_none(item.get("institution"))
+        degree = _text_or_none(item.get("degreeObtained"))
+        if not institution and not degree:
+            continue
+        completed = item.get("completedDate")
+        match = _YEAR_RE.search(completed) if isinstance(completed, str) else None
+        out.append({
+            "institution": institution,
+            "degree": degree,
+            "year": int(match.group(0)) if match else None,
+        })
+    return out
+
+
+# Marketplace pricing field name -> output key. Values are passed through as
+# listed (strings); nothing is computed, normalized or corrected.
+_PRICING_FIELDS = {
+    "minRange": "min",
+    "maxRange": "max",
+    "frequency": "frequency",
+    "rate": "rate",
+    "cost": "cost",
+    "link": "link",
+}
+
+
+def marketplace_pricing(raw):
+    """[{"type": ..., ...}, ...] from the marketplace pricing column, e.g.
+    {"type": "aum", "min": "0.50", "max": "2.00", "unit": "percent of
+    assets"}, {"type": "flat_fee", "min": "1000", "max": "2500",
+    "frequency": "yearly"}, {"type": "hourly", "rate": "250"}.
+
+    Values are as listed on the advisor's profile: strings, never computed or
+    corrected. Two presentation-only changes: a trailing "%" is stripped from
+    AUM values (the unit says percent, so "%" is not doubled), and empty
+    strings plus the profile's "-1" unset-frequency marker are dropped. Plain
+    text is returned as (repaired) text."""
+    data = unwrap_dynamodb(raw)
+    if isinstance(data, str):
+        return _text_or_none(data)
+    if not isinstance(data, list):
+        return None
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        type_name = _text_or_none(item.get("typeName"))
+        if not type_name:
+            continue
+        entry = {"type": type_name.lower()}
+        is_aum = entry["type"] == "aum"
+        for field, value in item.items():
+            if field == "typeName":
+                continue
+            text = _text_or_none(value)
+            if text is None:
+                continue
+            key = _PRICING_FIELDS.get(field, field)
+            if key == "frequency":
+                if text == "-1":
+                    continue
+                text = text.lower()
+            if is_aum and key in ("min", "max"):
+                text = text.rstrip("%").strip()
+                if not text:
+                    continue
+            entry[key] = text
+        if is_aum and ("min" in entry or "max" in entry):
+            entry["unit"] = "percent of assets"
+        out.append(entry)
+    return out
+
+
+def marketplace_states(raw) -> list[str]:
+    """Allowed-state list from the marketplace allowedStates column: a
+    DynamoDB/JSON list (["TX", "OK"]) or comma-separated text ("NY,NJ")."""
+    data = unwrap_dynamodb(raw)
+    if isinstance(data, str):
+        return _split_state_csv(data)
+    if not isinstance(data, list):
+        return []
+    return [t for t in (_text_or_none(v) for v in data) if t]
+
+
+def marketplace_text_list(raw) -> list[str]:
+    """A JSON list of strings (in_their_own_words), each mojibake-repaired.
+    Non-string and empty items are skipped; [] when absent or unreadable."""
+    data = unwrap_dynamodb(raw)
+    if not isinstance(data, list):
+        return []
+    return [t for t in (_text_or_none(v) for v in data) if t]
+
+
+def marketplace_search_text(row) -> str:
+    """The casefolded text find_bookable_advisors' `specialty` filter matches
+    against: bio, client description, in-their-own-words answers, and
+    credential acronyms and names -- all after cleanup, so generic credential
+    marketing copy and DynamoDB JSON keys can never produce a match."""
+    parts = [
+        clean_text(_row_value(row, "bio")),
+        clean_text(_row_value(row, "clientDescription")),
+        *marketplace_text_list(_row_value(row, "in_their_own_words")),
+    ]
+    creds = marketplace_credentials(_row_value(row, "credentials"))
+    if isinstance(creds, str):
+        parts.append(creds)
+    elif creds:
+        for c in creds:
+            parts.extend([c["acronym"], c["name"]])
+    return "\n".join(p for p in parts if isinstance(p, str) and p).casefold()
 
 
 # ── marketplace member with no regulatory-dataset match (Gate A2 Ruling 1) ───

@@ -509,10 +509,17 @@ def find_bookable_advisors(
 
     All filters are optional — browsing with none of them is fine, since this
     tool's scope is already narrow. `specialty` matches against the advisor's
-    bio, client description, quick facts, and credentials (case-insensitive
-    substring). Returns, per member: their self-provided profile info (bio,
-    credentials, pricing, minimum account size, education, and more), a link
-    to their full AdvisorFinder profile, AND regulatory facts for their CRD.
+    bio, client description, "in their own words" answers, and credential
+    acronyms and names (case-insensitive substring; e.g. "CFP" finds CFP®
+    holders). Returns, per member: their self-provided profile info (bio;
+    `credentials` as [{acronym, name, status: "self-reported"}]; `education`
+    as [{institution, degree, year}]; `pricing` as a list of {type, ...}
+    entries such as {"type": "aum", "min": "0.50", "max": "1.00", "unit":
+    "percent of assets"}, {"type": "flat_fee", "min", "max", "frequency"},
+    {"type": "hourly", "rate"}, {"type": "one_time", "cost"} or
+    {"type": "fees_information", "link"}, with values exactly as listed on
+    the profile; minimum account size; allowed states; and more), a link to
+    their full AdvisorFinder profile, AND regulatory facts for their CRD.
     Members whose CRD is in our SEC dataset get the same registration status
     and four-state disclosure status check_advisor reports — never softened.
     Members whose CRD is NOT in our SEC dataset (typically state-registered
@@ -542,32 +549,36 @@ def find_bookable_advisors(
         # never folded into that query, same discipline as the marketplace
         # enrichment in search_advisors/get_advisor/check_advisor above.
         registration, disclosure = _regulatory_join(crd)
+        # Profile text goes through format.clean_text (mojibake repair) and
+        # the structured columns through the marketplace_* builders (DynamoDB
+        # JSON -> plain values). quickFacts is not output: in production it
+        # holds only UI field keys ("aum", "clientNumber"), not content.
+        clean = format.clean_text
         entry = {
             "crd": crd,
-            "name": row["displayName"],
-            "company": row["companyName"],
-            "city": row["city"],
+            "name": clean(row["displayName"]),
+            "company": clean(row["companyName"]),
+            "city": clean(row["city"]),
             "state": row["state"],
-            "bio": row["bio"],
-            "credentials": row["credentials"],
-            "client_description": row["clientDescription"],
-            "quick_facts": row["quickFacts"],
+            "bio": clean(row["bio"]),
+            "credentials": format.marketplace_credentials(row["credentials"]),
+            "client_description": clean(row["clientDescription"]),
             "min_account_size": row["minAccountSize"],
             "years_of_experience": row["yearsOfExperience"],
             "virtual_meetings_offered": row["virtualMeetingsOffered"],
-            "allowed_states": _split_states(row["allowedStates"]),
+            "allowed_states": format.marketplace_states(row["allowedStates"]),
             "member_since": row["memberSince"],
             "website": row["advisorWebsiteURL"],
             "linkedin": row["linkedInURL"],
             "twitter": row["twitterURL"],
             "bio_video": row["bioVideoLink"],
-            "education": row["education"],
+            "education": format.marketplace_education(row["education"]),
             "self_reported": {
                 "aum": row["aum"],
                 "client_number": row["clientNumber"],
                 "label": format.SELF_REPORTED_LABEL,
             },
-            "in_their_own_words": _json_list(row["in_their_own_words"]),
+            "in_their_own_words": format.marketplace_text_list(row["in_their_own_words"]),
             "registration": registration,
             "disclosure": disclosure,
             **format.marketplace_block(row),  # profile_url, job_title, pricing, note
@@ -589,8 +600,10 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     """Search SEC- and state-registered investment adviser FIRMS by name
     and/or state. Matches on the firm's primary name, legal name, or any
     "also known as" prior name on file. Returns, per match: CRD, name, city/
-    state, AUM band, advisor headcount, and a link to the firm's SEC IAPD
-    record. State-registered-only firms (not SEC-registered) are included but
+    state, AUM band, `advisor_count` (the number of individual advisors on
+    the firm's roster in our data — null for state-registered-only firms,
+    which have no roster), and a link to the firm's SEC IAPD record.
+    State-registered-only firms (not SEC-registered) are included but
     flagged — purely state-registered firms have no advisor rosters at all;
     state-listed firms showing rosters are dual-registered.
     """
@@ -638,13 +651,14 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
 @mcp.tool(title="Get firm profile", annotations=_read_only("Get firm profile"))
 def get_firm(crd: str) -> dict:
     """Get the full profile for an investment adviser FIRM by CRD number:
-    identity, address, website, AUM band, headcount, how they charge
+    identity, address, website, AUM band, total employees, how they charge
     (a list), any disclosure flag, state registrations,
     office locations (private-residence addresses are withheld per SEC
     privacy rules), prior/other names, fee details from their ADV Part 2A
-    brochure (marked as estimated when it is), and how many individual
-    advisor records we have on file for them (an empty roster does not
-    necessarily mean an empty firm — see the caveat when that happens).
+    brochure (marked as estimated when it is), and `advisor_count`: how many
+    individual advisor records we have on file for them (an empty roster
+    does not necessarily mean an empty firm — see the caveat when that
+    happens).
     Client types are withheld (see client_types_note).
     State-registered-only firms get a reduced profile.
     """
@@ -677,6 +691,8 @@ def get_firm(crd: str) -> dict:
             "state": s["address_state"],
             "aum_band": s["aum_band"],
             "total_employees": s["total_employees"],
+            # No roster for a purely state-registered firm (see caveat above).
+            "advisor_count": None,
             "states_approved": _split_states(s["states_approved"]),
         }
         return format.envelope(payload, caveats=caveats, verify=_firm_verify_links(crd))
@@ -715,10 +731,15 @@ def get_firm(crd: str) -> dict:
         if c["needs_review"]:
             content_out["note"] = "unverified — scraped from firm website"
 
-    if bundle["roster_count"] == 0 and (f["investment_adviser_reps"] or 0) > 0:
+    # The count is the firm's roster in our data (distinct advisors). The
+    # Form ADV `investment_adviser_reps` figure is deliberately not shown: it
+    # is unreliable upstream (0 for firms with thousands of roster advisors)
+    # and is dropped in schema 5.
+    if bundle["roster_count"] == 0:
         caveats.append(
-            "We don't have individual advisor records for this firm; the firm "
-            f"reports {f['investment_adviser_reps']} investment adviser reps."
+            "We don't have individual advisor records for this firm. An empty "
+            "roster here does not mean the firm has no advisors — check the "
+            "firm's SEC IAPD record (link in verify)."
         )
 
     payload = {
@@ -735,7 +756,7 @@ def get_firm(crd: str) -> dict:
         "website": f["website_clean"],
         "aum_band": f["aum_band"],
         "total_employees": f["total_employees"],
-        "investment_adviser_reps": f["investment_adviser_reps"],
+        "advisor_count": bundle["roster_count"],
         "client_types_note": (
             "Client types are not available in this data version. See Item 5.D "
             "of the firm's Form ADV on SEC IAPD (link in verify)."
@@ -747,6 +768,8 @@ def get_firm(crd: str) -> dict:
         "other_names": other_names,
         "fees": format.fee_block(bundle["part2a"]),
         "content": content_out,
+        # Same value as advisor_count; kept so existing clients of this
+        # shipped key do not break.
         "advisor_roster_count": bundle["roster_count"],
     }
     return format.envelope(payload, caveats=caveats, verify=_firm_verify_links(crd))

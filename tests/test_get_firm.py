@@ -108,3 +108,42 @@ def test_firm_content_needs_review_note():
     result = server.get_firm(crd="100001")
     assert result["content"]["tagline"] == "Wealth, simplified."
     assert "unverified" in result["content"]["note"].lower()
+
+
+# ── advisor_count comes from the roster, never the Form ADV column ──────────
+
+def _roster_and_adv(crd):
+    from advisorfinder_mcp import db
+    with db.get_conn() as conn:
+        roster = conn.execute(
+            "SELECT COUNT(DISTINCT ind_source_id) FROM ia_rep_firms WHERE crd_number = ?",
+            (crd,),
+        ).fetchone()[0]
+        adv = conn.execute(
+            "SELECT investment_adviser_reps FROM firms WHERE crd_number = ?", (crd,)
+        ).fetchone()[0]
+    return roster, adv
+
+
+def test_advisor_count_is_roster_count_when_adv_figure_disagrees():
+    roster, adv = _roster_and_adv("100001")
+    assert roster != adv  # guard: the fixture disagrees, as production does
+    result = server.get_firm(crd="100001")
+    assert result["advisor_count"] == roster
+    assert result["advisor_roster_count"] == roster
+
+
+def test_adv_rep_figure_is_never_exposed():
+    roster, adv = _roster_and_adv("100003")
+    assert roster == 0 and adv > 0
+    result = server.get_firm(crd="100003")
+    assert "investment_adviser_reps" not in result
+    assert result["advisor_count"] == 0
+    # The empty-roster caveat must not quote the unreliable ADV figure.
+    assert not any(str(adv) in c for c in result["coverage_caveats"])
+    assert not any("investment adviser reps" in c for c in result["coverage_caveats"])
+
+
+def test_state_only_reduced_profile_has_null_advisor_count():
+    result = server.get_firm(crd="500001")
+    assert result["advisor_count"] is None

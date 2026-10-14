@@ -579,3 +579,180 @@ def test_name_rank_tokens_none_and_empty():
 def test_name_rank_tokens_uses_raw_tokens_not_fts_form():
     # never the quoted/starred FTS form
     assert all('"' not in t and "*" not in t for t in fmt.name_rank_tokens("john smi*"))
+
+
+# ── marketplace cleanup: DynamoDB JSON unwrap + mojibake repair ──────────────
+# Shapes below are copied from the production marketplace export (schema 4).
+import json  # noqa: E402
+
+_CFP_DESCRIPTION = "A CFP professional is bound to be a fiduciary..."
+
+
+def _av_credential(acronym, value, priority=None, id_tag="S"):
+    m = {
+        "acronym": {"S": acronym},
+        "value": {"S": value},
+        "description": {"S": _CFP_DESCRIPTION},
+        "requirements": {"S": "Exam plus 6,000 hours of experience."},
+        "quickFact": {"S": "Over 100,000 CFP professionals."},
+        "id": {id_tag: "7"},
+    }
+    if priority is not None:
+        m["sortingPriority"] = {"N": str(priority)}
+    return {"M": m}
+
+
+def test_unwrap_dynamodb_all_types():
+    raw = json.dumps({"M": {
+        "s": {"S": "x"}, "n": {"N": "0.50"}, "b": {"BOOL": True}, "z": {"NULL": True},
+        "l": {"L": [{"S": "a"}, {"N": "2"}]}, "ss": {"SS": ["p", "q"]}, "ns": {"NS": ["1", "2"]},
+        "m": {"M": {"inner": {"S": "y"}}},
+    }})
+    assert fmt.unwrap_dynamodb(raw) == {
+        "s": "x", "n": "0.50", "b": True, "z": None, "l": ["a", "2"],
+        "ss": ["p", "q"], "ns": ["1", "2"], "m": {"inner": "y"},
+    }
+
+
+def test_unwrap_dynamodb_tolerates_plain_values():
+    assert fmt.unwrap_dynamodb("CFP, CFA") == "CFP, CFA"
+    assert fmt.unwrap_dynamodb('["a", "b"]') == ["a", "b"]
+    assert fmt.unwrap_dynamodb('{"plain": 1, "nested": {"S": "x"}}') == {"plain": 1, "nested": "x"}
+    assert fmt.unwrap_dynamodb([{"S": "TX"}]) == ["TX"]
+    assert fmt.unwrap_dynamodb(None) is None
+    assert fmt.unwrap_dynamodb("   ") is None
+
+
+@pytest.mark.parametrize("bad", [
+    "[{not json", '{"S": 5}', '{"M": "x"}', '{"L": 3}', '{"N": true}', '{"SS": "x"}', b"\xff\xfe[", 3.5,
+])
+def test_unwrap_dynamodb_never_raises_on_malformed_input(bad):
+    fmt.unwrap_dynamodb(bad)  # must not raise
+
+
+def test_unwrap_dynamodb_bad_entries_become_none():
+    assert fmt.unwrap_dynamodb('{"S": 5}') is None
+    assert fmt.unwrap_dynamodb('[{"S": 5}, {"S": "ok"}]') == [None, "ok"]
+
+
+def test_marketplace_credentials_clean_sorted_and_labeled():
+    raw = json.dumps([
+        _av_credential("CFA", "Chartered Financial Analyst", 2),
+        _av_credential("CFP®", "Certified Financial Planner™", 0, id_tag="N"),
+        {"M": {"id": {"S": "99"}, "sortingPriority": {"N": "1"}}},  # bare catalog id
+        _av_credential("ChFC", "Chartered Financial Consultant"),  # no sortingPriority
+    ])
+    assert fmt.marketplace_credentials(raw) == [
+        {"acronym": "CFP®", "name": "Certified Financial Planner™", "status": "self-reported"},
+        {"acronym": "CFA", "name": "Chartered Financial Analyst", "status": "self-reported"},
+        {"acronym": "ChFC", "name": "Chartered Financial Consultant", "status": "self-reported"},
+    ]
+    # The generic credential marketing copy never reaches the output.
+    assert "fiduciary" not in json.dumps(fmt.marketplace_credentials(raw))
+
+
+def test_marketplace_credentials_plain_and_empty():
+    assert fmt.marketplace_credentials("CFP, CFA") == "CFP, CFA"
+    assert fmt.marketplace_credentials("[]") == []
+    assert fmt.marketplace_credentials(None) is None
+    assert fmt.marketplace_credentials("[{broken") == "[{broken"
+
+
+def test_marketplace_education_extracts_year_never_invents():
+    raw = json.dumps([
+        {"M": {"institution": {"S": "Texas A&M"}, "degreeObtained": {"S": "BBA"},
+               "completedDate": {"S": "Fri May 15 2009 04:00:00 GMT+0000 (Coordinated Universal Time)"},
+               "educationId": {"S": "e1"}}},
+        {"M": {"institution": {"S": "NYU"}, "degreeObtained": {"S": "MBA"},
+               "completedDate": {"NULL": True}, "educationId": {"S": "e2"}}},
+        {"M": {"institution": {"S": "Rice"}, "degreeObtained": {"S": "BA"},
+               "completedDate": {"S": "not a date GMT+0000"}}},
+        {"M": {"educationId": {"S": "e3"}}},
+    ])
+    assert fmt.marketplace_education(raw) == [
+        {"institution": "Texas A&M", "degree": "BBA", "year": 2009},
+        {"institution": "NYU", "degree": "MBA", "year": None},
+        {"institution": "Rice", "degree": "BA", "year": None},
+    ]
+    assert fmt.marketplace_education("MBA, NYU Stern School of Business") == "MBA, NYU Stern School of Business"
+
+
+def test_marketplace_pricing_shapes_values_as_listed():
+    raw = json.dumps([
+        {"M": {"typeName": {"S": "AUM"}, "minRange": {"S": ".5%"}, "maxRange": {"S": "2.00"}}},
+        {"M": {"typeName": {"S": "AUM"}, "minRange": {"S": "65"}, "maxRange": {"S": ""}}},
+        {"M": {"typeName": {"S": "AUM"}}},
+        {"M": {"typeName": {"S": "FLAT_FEE"}, "minRange": {"S": "1000"}, "maxRange": {"S": "2500"},
+               "frequency": {"S": "YEARLY"}}},
+        {"M": {"typeName": {"S": "FLAT_FEE"}, "frequency": {"N": "-1"}}},
+        {"M": {"typeName": {"S": "FLAT_FEE"}, "frequency": {"S": ""}, "minRange": {"S": ""}}},
+        {"M": {"typeName": {"S": "HOURLY"}, "rate": {"S": "250"}}},
+        {"M": {"typeName": {"S": "ONE_TIME"}, "cost": {"S": "1,500"}}},
+        {"M": {"typeName": {"S": "FEES_INFORMATION"}, "link": {"S": "https://example.com/fees"}}},
+        {"M": {"minRange": {"S": "1"}}},  # no type: skipped
+    ])
+    assert fmt.marketplace_pricing(raw) == [
+        {"type": "aum", "min": ".5", "max": "2.00", "unit": "percent of assets"},
+        # Outlier passed through as listed, never "corrected".
+        {"type": "aum", "min": "65", "unit": "percent of assets"},
+        {"type": "aum"},
+        {"type": "flat_fee", "min": "1000", "max": "2500", "frequency": "yearly"},
+        {"type": "flat_fee"},
+        {"type": "flat_fee"},
+        {"type": "hourly", "rate": "250"},
+        {"type": "one_time", "cost": "1,500"},
+        {"type": "fees_information", "link": "https://example.com/fees"},
+    ]
+
+
+def test_marketplace_pricing_plain_text_passes_through():
+    text = "$3,000/yr flat planning fee, or $250/hr for one-off consultations"
+    assert fmt.marketplace_pricing(text) == text
+    assert fmt.marketplace_pricing(None) is None
+
+
+def test_marketplace_states_av_json_and_csv():
+    assert fmt.marketplace_states('[{"S":"TX"},{"S":"OK"}]') == ["TX", "OK"]
+    assert fmt.marketplace_states("NY,NJ, CT") == ["NY", "NJ", "CT"]
+    assert fmt.marketplace_states(None) == []
+    assert fmt.marketplace_states("[{bad") == ["[{bad"]  # plain text, split as CSV
+
+
+# Mojibake samples from production (UTF-8 decoded as cp1252 upstream).
+@pytest.mark.parametrize("garbled, fixed", [
+    ("ðŸ‘‹ I'm Allen", "👋 I'm Allen"),
+    ("Nonnaâ€™s Garden", "Nonna’s Garden"),
+    ("CERTIFIED FINANCIAL PLANNERÂ® professional", "CERTIFIED FINANCIAL PLANNER® professional"),
+    ("a â€œfortressâ€\x9d around", "a “fortress” around"),
+    ("transitionsâ€”retirement", "transitions—retirement"),
+])
+def test_clean_text_repairs_mojibake(garbled, fixed):
+    assert fmt.clean_text(garbled) == fixed
+
+
+@pytest.mark.parametrize("correct", [
+    "CFP® professional", "Nonna’s “Garden”", "José García", "Hello! 👋", "fee-only — 1.00%",
+    "Certified Financial Planner™", "plain ASCII text", "",
+])
+def test_clean_text_leaves_correct_text_unchanged(correct):
+    assert fmt.clean_text(correct) == correct
+
+
+def test_clean_text_non_strings_pass_through():
+    assert fmt.clean_text(None) is None
+    assert fmt.clean_text(5) == 5
+
+
+def test_marketplace_search_text_excludes_credential_marketing_copy():
+    row = {
+        "bio": "Helps Nonnaâ€™s family.",
+        "clientDescription": None,
+        "in_their_own_words": '["I love sailing."]',
+        "credentials": json.dumps([_av_credential("CFP®", "Certified Financial Planner™", 0)]),
+    }
+    text = fmt.marketplace_search_text(row)
+    assert "nonna’s" in text  # repaired before matching
+    assert "sailing" in text
+    assert "cfp®" in text and "certified financial planner™" in text
+    assert "fiduciary" not in text  # generic description copy is not searched
+    assert '"s"' not in text and "acronym" not in text  # no JSON keys

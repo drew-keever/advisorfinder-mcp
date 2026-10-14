@@ -81,3 +81,61 @@ def test_search_firms_renders_llc_uppercase():
     result = server.search_firms(name="alpha wealth")
     names = {r["name"] for r in result["results"]}
     assert "Alpha Wealth LLC" in names
+
+
+# ── advisor_count comes from the roster, never the Form ADV column ──────────
+# firms.investment_adviser_reps is unreliable upstream (production: Fisher
+# Investments CRD 107342 reports 0 but has 2,861 roster advisors). The fixture
+# disagrees the same way: 100001 reports 5 but has a larger roster, 100003
+# reports 5 but has no roster at all. Expectations are computed from the
+# fixture's own ia_rep_firms, never hard-coded.
+
+def _fixture_counts():
+    from advisorfinder_mcp import db
+    with db.get_conn() as conn:
+        roster = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "SELECT crd_number, COUNT(DISTINCT ind_source_id) FROM ia_rep_firms "
+                "GROUP BY crd_number"
+            )
+        }
+        adv = {
+            r[0]: r[1]
+            for r in conn.execute("SELECT crd_number, investment_adviser_reps FROM firms")
+        }
+    return roster, adv
+
+
+def test_advisor_count_is_distinct_roster_count_not_adv_figure():
+    roster, adv = _fixture_counts()
+    # Guard: the fixture really does disagree, so this test proves something.
+    assert roster.get("100001", 0) != adv["100001"]
+    assert roster.get("100003", 0) != adv["100003"]
+
+    result = server.search_firms(limit=50)
+    by_crd = {r["crd"]: r for r in result["results"]}
+    for crd in ("100001", "100002", "100003"):
+        assert by_crd[crd]["advisor_count"] == roster.get(crd, 0), crd
+
+
+def test_advisor_count_is_none_for_state_only_firm():
+    result = server.search_firms(limit=50)
+    state_only = [r for r in result["results"] if "caveat" in r]
+    assert state_only
+    assert all(r["advisor_count"] is None for r in state_only)
+
+
+def test_roster_counts_counts_distinct_people():
+    # One advisor linked to the same firm twice (two branches) is one person.
+    import sqlite3
+
+    from advisorfinder_mcp import db
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE ia_rep_firms (ind_source_id TEXT, crd_number TEXT)")
+    conn.executemany(
+        "INSERT INTO ia_rep_firms VALUES (?, ?)",
+        [("1", "A"), ("1", "A"), ("2", "A"), ("3", "B")],
+    )
+    assert db.roster_counts(conn, ["A", "B", "C"]) == {"A": 2, "B": 1}
+    assert db.roster_counts(conn, []) == {}

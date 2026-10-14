@@ -2,14 +2,15 @@
 
 Holds all query functions used by the server's tools, plus connection/schema
 plumbing. server.py holds tool orchestration and consumer-facing wording;
-this module holds SQL and nothing else.
+this module holds SQL (plus the one Python-side filter in search_marketplace,
+which matches against format.marketplace_search_text -- see its docstring).
 """
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import SCHEMA_VERSION
-from .format import fts_query, name_rank_tokens
+from .format import fts_query, marketplace_search_text, name_rank_tokens
 
 # Set by bootstrap.ensure_db() (or directly by tests) before any query runs.
 DB_PATH: Path | None = None
@@ -350,7 +351,11 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                 "city": frow["address_city"],
                 "state": frow["address_state"],
                 "aum_band": frow["aum_band"],
-                "advisor_count": frow["investment_adviser_reps"],
+                # Filled in from the roster below, for the returned page only.
+                # firms.investment_adviser_reps (the Form ADV figure) is NOT
+                # used: it is unreliable upstream (0 for Fisher Investments,
+                # which has 2,861 roster advisors) and is dropped in schema 5.
+                "advisor_count": None,
                 "kinds": info["kinds"],
                 "other_name": info["other_name"],
                 "state_only": False,
@@ -371,7 +376,36 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
             })
 
         results.sort(key=lambda r: r["name"] or "")
-        return results[:limit]
+        page = results[:limit]
+
+        # Roster-based advisor counts: ONE grouped query over the returned
+        # page (<= limit crds, so the IN list stays small), never per-row and
+        # never over the whole match set -- a state='NY' browse matches
+        # thousands of firms, nearly all of which the limit discards.
+        # State-only firms keep None: they have no roster at all.
+        sec_crds = [r["crd_number"] for r in page if not r["state_only"]]
+        if sec_crds:
+            counts = roster_counts(conn, sec_crds)
+            for r in page:
+                if not r["state_only"]:
+                    r["advisor_count"] = counts.get(r["crd_number"], 0)
+        return page
+
+
+def roster_counts(conn: sqlite3.Connection, crds: list[str]) -> dict[str, int]:
+    """{crd: number of DISTINCT advisors (ind_source_id) on that firm's
+    roster} for `crds`, in one grouped query (uses idx_iaf_crd). A crd with
+    no roster rows is absent from the dict; callers default it to 0. This is
+    the only advisor count the server reports for a firm -- see get_firm."""
+    if not crds:
+        return {}
+    placeholders = ",".join("?" * len(crds))
+    rows = conn.execute(
+        "SELECT crd_number, COUNT(DISTINCT ind_source_id) FROM ia_rep_firms "
+        f"WHERE crd_number IN ({placeholders}) GROUP BY crd_number",
+        list(crds),
+    ).fetchall()
+    return {r[0]: r[1] for r in rows}
 
 
 # ── marketplace (optional; present only when the export was built with
@@ -410,23 +444,24 @@ def search_marketplace(
     limit: int = 20,
 ) -> list[sqlite3.Row]:
     """Returns up to `limit` marketplace_advisors rows matching all supplied
-    filters (AND semantics). `specialty` is a case-insensitive substring LIKE
-    across bio/clientDescription/quickFacts/credentials (294 rows in
-    production — a plain LIKE scan is fine at this scale, no FTS needed).
-    `city`/`state` are exact NOCASE equality. Empty list (not an error) when
-    the table is absent."""
+    filters (AND semantics), ordered by displayName. `city`/`state` are exact
+    NOCASE equality in SQL. `specialty` is a case-insensitive substring match
+    against format.marketplace_search_text(row): the CLEANED bio, client
+    description, in-their-own-words answers, and credential acronyms/names.
+
+    `specialty` is matched in Python, not SQL LIKE: the raw credentials column
+    is DynamoDB JSON that carries generic credential marketing copy (every
+    CFP entry says "fiduciary"), so a LIKE over it matched advisors on text
+    that says nothing about them, and on JSON keys. 294 rows in production,
+    so loading the city/state-filtered rows and filtering here is cheap. The
+    limit is applied AFTER the specialty filter. Empty list (not an error)
+    when the table is absent."""
     with get_conn() as conn:
         if not _marketplace_table_exists(conn):
             return []
 
         where = ["1=1"]
         params: list = []
-        if specialty:
-            like = f"%{specialty}%"
-            where.append(
-                "(bio LIKE ? OR clientDescription LIKE ? OR quickFacts LIKE ? OR credentials LIKE ?)"
-            )
-            params.extend([like, like, like, like])
         if city:
             where.append("city = ? COLLATE NOCASE")
             params.append(city)
@@ -434,18 +469,20 @@ def search_marketplace(
             where.append("state = ? COLLATE NOCASE")
             params.append(state)
 
-        # ORDER BY before LIMIT, same discipline as search_advisors/search_firms:
-        # without it, which rows a plain browse or a narrowly-matching filter
-        # returns is whatever order SQLite happens to walk the table in —
-        # unspecified, and free to reshuffle on any rebuild/VACUUM. At fixture
-        # scale (2 rows) that's invisible; at production scale (294 rows) it
-        # would make a `limit`-truncated result set silently non-deterministic.
+        # ORDER BY before the limit, same discipline as search_advisors/
+        # search_firms: without it, which rows a `limit`-truncated result
+        # returns would be whatever order SQLite walks the table in --
+        # unspecified, and free to reshuffle on any rebuild/VACUUM.
         sql = (
             "SELECT * FROM marketplace_advisors WHERE " + " AND ".join(where)
-            + " ORDER BY displayName LIMIT ?"
+            + " ORDER BY displayName"
         )
-        params.append(limit)
-        return conn.execute(sql, params).fetchall()
+        rows = conn.execute(sql, params).fetchall()
+
+    needle = specialty.strip().casefold() if specialty else ""
+    if needle:
+        rows = [r for r in rows if needle in marketplace_search_text(r)]
+    return rows[:limit]
 
 
 def marketplace_stats() -> dict | None:
@@ -490,9 +527,7 @@ def get_firm(crd: str) -> dict | None:
         content = conn.execute(
             "SELECT * FROM firm_content WHERE crd_number = ?", (crd,)
         ).fetchone()
-        roster_count = conn.execute(
-            "SELECT COUNT(DISTINCT ind_source_id) FROM ia_rep_firms WHERE crd_number = ?", (crd,)
-        ).fetchone()[0]
+        roster_count = roster_counts(conn, [crd]).get(crd, 0)
 
         return {
             "firm": dict(frow) if frow else None,
