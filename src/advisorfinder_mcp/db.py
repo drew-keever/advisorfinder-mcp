@@ -291,8 +291,10 @@ def get_advisor(crd: str) -> dict | None:
 
 def search_firms(name=None, state=None, limit=20) -> list[dict]:
     """Returns up to `limit` firm bundles. firm_fts kinds: primary/legal/other
-    (from `firms`) and state (from firms_state, disjoint from `firms` by
-    construction). `kinds` on each bundle is the set of kinds that matched (or,
+    (from `firms`) and state (from firms_state). The two tables are NOT
+    disjoint (139 CRDs are in both in production): a firms_state row whose CRD
+    is already returned from `firms` is skipped, so each CRD appears once and
+    the full `firms` row (with its roster count) wins. `kinds` on each bundle is the set of kinds that matched (or,
     with no name filter, {'primary'}/{'state'} for a plain browse); the caller
     decides matched_as / state caveat from that.
 
@@ -360,8 +362,11 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                 "other_name": info["other_name"],
                 "state_only": False,
             })
+        sec_returned = {r["crd_number"] for r in results}
         for srow in conn.execute(ssql, sparams).fetchall():
             crd = srow["crd_number"]
+            if crd in sec_returned:
+                continue  # dual-listed: the `firms` row above already covers it
             info = hits[crd] if hits is not None else {"kinds": {"state"}, "other_name": None}
             results.append({
                 "crd_number": crd,
@@ -393,16 +398,25 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
 
 
 def roster_counts(conn: sqlite3.Connection, crds: list[str]) -> dict[str, int]:
-    """{crd: number of DISTINCT advisors (ind_source_id) on that firm's
-    roster} for `crds`, in one grouped query (uses idx_iaf_crd). A crd with
-    no roster rows is absent from the dict; callers default it to 0. This is
-    the only advisor count the server reports for a firm -- see get_firm."""
+    """{crd: number of DISTINCT investment adviser representatives
+    (ind_source_id) on that firm's roster} for `crds`, in one grouped query
+    (uses idx_iaf_crd). A crd with no adviser rows is absent from the dict;
+    callers default it to 0. This is the only advisor count the server
+    reports for a firm -- see get_firm.
+
+    Only ia_only = 'Y' rows count. IAPD returns a dual-registered person's job
+    twice (iaOnly 'Y' = the adviser association, 'N' = the broker-dealer
+    association), and a broker-only person has only 'N' rows. Counting 'N'
+    rows reported broker-dealer registrants as advisers (production: J.P.
+    Morgan Securities 35,860 vs 13,866 advisers; Goldman Sachs & Co. 8,255 vs
+    0). Production holds only 'Y'/'N'; a NULL or other flag is not counted."""
     if not crds:
         return {}
     placeholders = ",".join("?" * len(crds))
     rows = conn.execute(
         "SELECT crd_number, COUNT(DISTINCT ind_source_id) FROM ia_rep_firms "
-        f"WHERE crd_number IN ({placeholders}) GROUP BY crd_number",
+        f"WHERE crd_number IN ({placeholders}) AND ia_only = 'Y' "
+        "GROUP BY crd_number",
         list(crds),
     ).fetchall()
     return {r[0]: r[1] for r in rows}

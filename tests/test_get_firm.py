@@ -115,8 +115,11 @@ def test_firm_content_needs_review_note():
 def _roster_and_adv(crd):
     from advisorfinder_mcp import db
     with db.get_conn() as conn:
+        # Investment adviser representatives only: ia_only = 'Y' (see
+        # db.roster_counts -- 'N' rows are broker-dealer registrations).
         roster = conn.execute(
-            "SELECT COUNT(DISTINCT ind_source_id) FROM ia_rep_firms WHERE crd_number = ?",
+            "SELECT COUNT(DISTINCT ind_source_id) FROM ia_rep_firms "
+            "WHERE crd_number = ? AND ia_only = 'Y'",
             (crd,),
         ).fetchone()[0]
         adv = conn.execute(
@@ -147,3 +150,23 @@ def test_adv_rep_figure_is_never_exposed():
 def test_state_only_reduced_profile_has_null_advisor_count():
     result = server.get_firm(crd="500001")
     assert result["advisor_count"] is None
+
+
+def test_broker_only_person_is_not_counted():
+    # A person whose only link to the firm is an ia_only = 'N' (broker-dealer)
+    # row is not an investment adviser representative there and must not be
+    # counted. Computed from the fixture: 100001 has such a person.
+    from advisorfinder_mcp import db
+    with db.get_conn() as conn:
+        everyone = conn.execute(
+            "SELECT COUNT(DISTINCT ind_source_id) FROM ia_rep_firms WHERE crd_number = '100001'"
+        ).fetchone()[0]
+        broker_only = conn.execute(
+            "SELECT COUNT(DISTINCT ind_source_id) FROM ia_rep_firms f "
+            "WHERE crd_number = '100001' AND NOT EXISTS ("
+            "  SELECT 1 FROM ia_rep_firms y WHERE y.crd_number = f.crd_number "
+            "  AND y.ind_source_id = f.ind_source_id AND y.ia_only = 'Y')"
+        ).fetchone()[0]
+    assert broker_only >= 1  # guard: the fixture has a broker-only person
+    result = server.get_firm(crd="100001")
+    assert result["advisor_count"] == everyone - broker_only

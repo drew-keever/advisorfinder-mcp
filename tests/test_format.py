@@ -756,3 +756,77 @@ def test_marketplace_search_text_excludes_credential_marketing_copy():
     assert "cfp®" in text and "certified financial planner™" in text
     assert "fiduciary" not in text  # generic description copy is not searched
     assert '"s"' not in text and "acronym" not in text  # no JSON keys
+
+
+# ── Excel export artifacts in marketplace prose ──────────────────────────────
+# Production: a literal backslash-n (two characters) in 206/294 bios and 11
+# client descriptions, and "_x000D_" in 8 bios + 4 client descriptions.
+
+def test_clean_prose_removes_excel_artifacts():
+    raw = "planning._x000D_\\n_x000D_\\nAs a citizen of the US.\\nJoe joined in 1975.  "
+    assert fmt.clean_prose(raw) == "planning.\n\nAs a citizen of the US.\nJoe joined in 1975."
+
+
+def test_clean_prose_collapses_three_or_more_newlines_to_two():
+    assert fmt.clean_prose("a\\n\\n\\n\\nb") == "a\n\nb"
+    assert fmt.clean_prose("a\n\\n\nb") == "a\n\nb"
+
+
+def test_clean_prose_leaves_clean_text_unchanged_and_still_repairs_mojibake():
+    assert fmt.clean_prose("It’s fine.\n\nNew paragraph. ") == "It’s fine.\n\nNew paragraph. "
+    assert fmt.clean_prose("Iâ€™m a CFPÂ®\\nholder") == "I’m a CFP®\nholder"
+    assert fmt.clean_prose(None) is None
+    assert fmt.clean_prose("") == ""
+
+
+def test_prose_lists_and_degrees_are_cleaned():
+    assert fmt.marketplace_text_list(json.dumps(["One\\ntwo_x000D_", "  "])) == ["One\ntwo"]
+    raw = json.dumps([{"M": {"institution": {"S": "NYU"}, "degreeObtained": {"S": "MBA_x000D_\\n"}}}])
+    assert fmt.marketplace_education(raw) == [{"institution": "NYU", "degree": "MBA", "year": None}]
+
+
+# ── pricing: unit only for bare numbers; allowlisted keys ────────────────────
+
+def test_aum_unit_only_when_every_present_value_is_a_bare_number():
+    raw = json.dumps([
+        {"M": {"typeName": {"S": "AUM"}, "minRange": {"S": "1%"}, "maxRange": {"S": "1.25"}}},
+        {"M": {"typeName": {"S": "AUM"}, "minRange": {"S": "1%"}, "maxRange": {"S": "varies"}}},
+        {"M": {"typeName": {"S": "AUM"}, "minRange": {"S": "$500"}}},
+        {"M": {"typeName": {"S": "AUM"}, "minRange": {"S": "1%%"}}},  # one "%" removed only
+        {"M": {"typeName": {"S": "AUM"}, "minRange": {"S": "2.0"}, "maxRange": {"S": "1.1"}}},
+    ])
+    assert fmt.marketplace_pricing(raw) == [
+        {"type": "aum", "min": "1", "max": "1.25", "unit": "percent of assets"},
+        {"type": "aum", "min": "1", "max": "varies"},
+        {"type": "aum", "min": "$500"},
+        {"type": "aum", "min": "1%"},
+        # min > max passes through as listed, never "corrected".
+        {"type": "aum", "min": "2.0", "max": "1.1", "unit": "percent of assets"},
+    ]
+
+
+def test_pricing_drops_unknown_fields():
+    raw = json.dumps([
+        {"M": {"typeName": {"S": "HOURLY"}, "rate": {"S": "250"}, "internalId": {"S": "x1"},
+               "unit": {"S": "smuggled"}, "description": {"S": "promo copy"}}},
+    ])
+    assert fmt.marketplace_pricing(raw) == [{"type": "hourly", "rate": "250"}]
+
+
+# ── NaN / Infinity never become "nan" strings or undefined ordering ──────────
+
+def test_non_finite_numbers_are_dropped_and_sort_last():
+    raw = (
+        '[{"M": {"acronym": {"S": "Z1"}, "sortingPriority": {"N": NaN}}},'
+        ' {"M": {"acronym": {"S": "Z2"}, "sortingPriority": {"N": "Infinity"}}},'
+        ' {"M": {"acronym": {"S": "Z3"}, "sortingPriority": {"S": "abc"}}},'
+        ' {"M": {"acronym": {"S": "A"}, "sortingPriority": {"N": "2"}}},'
+        ' {"M": {"acronym": {"S": "B"}, "sortingPriority": {"N": "-Infinity"}}},'
+        ' {"M": {"acronym": {"S": "C"}, "sortingPriority": {"N": "1"}}}]'
+    )
+    assert [c["acronym"] for c in fmt.marketplace_credentials(raw)] == ["C", "A", "Z1", "Z2", "Z3", "B"]
+    assert fmt.unwrap_dynamodb('{"N": NaN}') is None
+    assert fmt.unwrap_dynamodb('{"N": Infinity}') is None
+    pricing = fmt.marketplace_pricing('[{"M": {"typeName": {"S": "HOURLY"}, "rate": NaN}}]')
+    assert pricing == [{"type": "hourly"}]
+    assert "nan" not in json.dumps(fmt.marketplace_credentials(raw)).lower()

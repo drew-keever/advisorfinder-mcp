@@ -5,6 +5,7 @@ from — future changes to advisorfinder.com deep links, or to how we phrase
 disclosure/fee caveats, only ever touch this file.
 """
 import json
+import math
 import re
 import unicodedata
 import urllib.parse
@@ -249,7 +250,11 @@ def marketplace_block(row: Any) -> dict:
 # on output (no data refresh is possible at schema 4):
 #   1. Mojibake: UTF-8 text that was decoded as cp1252 upstream ("â€™" for
 #      "’", "CFPÂ®" for "CFP®", "ðŸ‘‹" for "👋"). clean_text() repairs it.
-#   2. DynamoDB attribute-value JSON in credentials/education/pricing/
+#   2. Excel export artifacts in the prose fields (bio, clientDescription,
+#      in-their-own-words answers, education degrees): a literal backslash-n
+#      ("\\n", two characters) where a line break was, and "_x000D_" (the
+#      escaped carriage return). clean_prose() repairs them.
+#   3. DynamoDB attribute-value JSON in credentials/education/pricing/
 #      allowedStates/quickFacts ([{"M": {"acronym": {"S": "CFP®"}}}]).
 #      unwrap_dynamodb() plus the marketplace_* builders below turn it into
 #      plain values.
@@ -274,6 +279,28 @@ def clean_text(value):
         return value
 
 
+_X000D = "_x000D_"
+_LITERAL_NEWLINE = "\\n"  # backslash + "n": two characters, not a newline
+_EXCESS_NEWLINES_RE = re.compile(r"\n{3,}")
+
+
+def clean_prose(value):
+    """clean_text() plus removal of the Excel export artifacts in marketplace
+    PROSE fields only (bio, clientDescription, in-their-own-words answers,
+    education degrees): "_x000D_" is removed, a literal backslash-n becomes a
+    real newline, runs of 3+ newlines collapse to 2 (one blank line), and the
+    result is stripped. Not used for names, URLs or pricing values, where a
+    backslash could be content. Returns anything that is not a string
+    unchanged."""
+    value = clean_text(value)
+    if not isinstance(value, str) or not value:
+        return value
+    if _X000D not in value and _LITERAL_NEWLINE not in value:
+        return value  # no artifact: unchanged (not even stripped)
+    value = value.replace(_X000D, "").replace(_LITERAL_NEWLINE, "\n")
+    return _EXCESS_NEWLINES_RE.sub("\n\n", value).strip()
+
+
 _AV_TYPES = frozenset({"S", "N", "BOOL", "NULL", "M", "L", "SS", "NS"})
 
 
@@ -292,6 +319,8 @@ def _unwrap_av(value):
                 # normalization of advisor-entered values.
                 if isinstance(inner, bool) or not isinstance(inner, (str, int, float)):
                     return None
+                if isinstance(inner, float) and not math.isfinite(inner):
+                    return None  # never a "nan"/"inf" string
                 return str(inner)
             if tag == "BOOL":
                 return inner if isinstance(inner, bool) else None
@@ -335,14 +364,30 @@ def unwrap_dynamodb(value):
         return None
 
 
-def _text_or_none(value) -> str | None:
-    """A non-empty, mojibake-repaired, stripped string, or None."""
+def _text_or_none(value, clean=None) -> str | None:
+    """A non-empty, repaired, stripped string, or None. `clean` is the repair
+    function (clean_text by default; clean_prose for prose fields). A
+    non-finite float (NaN/Infinity from lenient JSON) is None, never "nan"."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         value = str(value)
     if not isinstance(value, str):
         return None
-    value = clean_text(value).strip()
+    value = (clean or clean_text)(value).strip()
     return value or None
+
+
+def _sort_priority(value) -> float:
+    """sortingPriority as a finite float; missing, non-numeric, NaN and
+    +/-Infinity all sort last (inf), so the order is always defined."""
+    if isinstance(value, bool):
+        return math.inf
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return math.inf
+    return number if math.isfinite(number) else math.inf
 
 
 def marketplace_credentials(raw):
@@ -365,16 +410,13 @@ def marketplace_credentials(raw):
         if not isinstance(item, dict):
             text = _text_or_none(item)
             if text:
-                keyed.append((float("inf"), index, {"acronym": None, "name": text, "status": "self-reported"}))
+                keyed.append((math.inf, index, {"acronym": None, "name": text, "status": "self-reported"}))
             continue
         acronym = _text_or_none(item.get("acronym"))
         name = _text_or_none(item.get("value"))
         if not acronym and not name:
             continue
-        try:
-            priority = float(item.get("sortingPriority"))
-        except (TypeError, ValueError):
-            priority = float("inf")
+        priority = _sort_priority(item.get("sortingPriority"))
         keyed.append((priority, index, {"acronym": acronym, "name": name, "status": "self-reported"}))
     keyed.sort(key=lambda t: (t[0], t[1]))
     return [entry for _, _, entry in keyed]
@@ -398,7 +440,7 @@ def marketplace_education(raw):
         if not isinstance(item, dict):
             continue
         institution = _text_or_none(item.get("institution"))
-        degree = _text_or_none(item.get("degreeObtained"))
+        degree = _text_or_none(item.get("degreeObtained"), clean_prose)
         if not institution and not degree:
             continue
         completed = item.get("completedDate")
@@ -411,8 +453,9 @@ def marketplace_education(raw):
     return out
 
 
-# Marketplace pricing field name -> output key. Values are passed through as
-# listed (strings); nothing is computed, normalized or corrected.
+# Marketplace pricing field name -> output key. This is an ALLOWLIST: a field
+# not named here is dropped, never passed through. Values are passed through
+# as listed (strings); nothing is computed or corrected.
 _PRICING_FIELDS = {
     "minRange": "min",
     "maxRange": "max",
@@ -423,17 +466,24 @@ _PRICING_FIELDS = {
 }
 
 
+_BARE_NUMBER_RE = re.compile(r"^(?:\d+(?:\.\d*)?|\.\d+)$")
+
+
 def marketplace_pricing(raw):
     """[{"type": ..., ...}, ...] from the marketplace pricing column, e.g.
     {"type": "aum", "min": "0.50", "max": "2.00", "unit": "percent of
     assets"}, {"type": "flat_fee", "min": "1000", "max": "2500",
     "frequency": "yearly"}, {"type": "hourly", "rate": "250"}.
 
-    Values are as listed on the advisor's profile: strings, never computed or
-    corrected. Two presentation-only changes: a trailing "%" is stripped from
-    AUM values (the unit says percent, so "%" is not doubled), and empty
-    strings plus the profile's "-1" unset-frequency marker are dropped. Plain
-    text is returned as (repaired) text."""
+    Output keys are an allowlist (type, min, max, unit, frequency, rate,
+    cost, link); any other source field is dropped. Values are as listed on
+    the advisor's profile: strings, never computed or corrected (min > max
+    passes through as listed). Formatting only: type and frequency are
+    lowercased, one trailing "%" is stripped from AUM min/max, and empty
+    strings plus the profile's "-1" unset-frequency marker are dropped. AUM
+    entries get "unit": "percent of assets" ONLY when every present min/max
+    is a bare number; otherwise no unit is claimed. Plain text is returned as
+    (repaired) text."""
     data = unwrap_dynamodb(raw)
     if isinstance(data, str):
         return _text_or_none(data)
@@ -449,22 +499,24 @@ def marketplace_pricing(raw):
         entry = {"type": type_name.lower()}
         is_aum = entry["type"] == "aum"
         for field, value in item.items():
-            if field == "typeName":
-                continue
+            key = _PRICING_FIELDS.get(field)
+            if key is None:
+                continue  # allowlist: typeName handled above, unknowns dropped
             text = _text_or_none(value)
             if text is None:
                 continue
-            key = _PRICING_FIELDS.get(field, field)
             if key == "frequency":
                 if text == "-1":
                     continue
                 text = text.lower()
             if is_aum and key in ("min", "max"):
-                text = text.rstrip("%").strip()
+                if text.endswith("%"):
+                    text = text[:-1].strip()  # one trailing "%" only
                 if not text:
                     continue
             entry[key] = text
-        if is_aum and ("min" in entry or "max" in entry):
+        amounts = [entry[k] for k in ("min", "max") if k in entry]
+        if is_aum and amounts and all(_BARE_NUMBER_RE.match(a) for a in amounts):
             entry["unit"] = "percent of assets"
         out.append(entry)
     return out
@@ -482,12 +534,13 @@ def marketplace_states(raw) -> list[str]:
 
 
 def marketplace_text_list(raw) -> list[str]:
-    """A JSON list of strings (in_their_own_words), each mojibake-repaired.
-    Non-string and empty items are skipped; [] when absent or unreadable."""
+    """A JSON list of strings (in_their_own_words), each repaired with
+    clean_prose. Non-string and empty items are skipped; [] when absent or
+    unreadable."""
     data = unwrap_dynamodb(raw)
     if not isinstance(data, list):
         return []
-    return [t for t in (_text_or_none(v) for v in data) if t]
+    return [t for t in (_text_or_none(v, clean_prose) for v in data) if t]
 
 
 def marketplace_search_text(row) -> str:
@@ -496,8 +549,8 @@ def marketplace_search_text(row) -> str:
     credential acronyms and names -- all after cleanup, so generic credential
     marketing copy and DynamoDB JSON keys can never produce a match."""
     parts = [
-        clean_text(_row_value(row, "bio")),
-        clean_text(_row_value(row, "clientDescription")),
+        clean_prose(_row_value(row, "bio")),
+        clean_prose(_row_value(row, "clientDescription")),
         *marketplace_text_list(_row_value(row, "in_their_own_words")),
     ]
     creds = marketplace_credentials(_row_value(row, "credentials"))

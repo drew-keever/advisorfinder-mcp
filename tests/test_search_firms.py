@@ -97,7 +97,7 @@ def _fixture_counts():
             r[0]: r[1]
             for r in conn.execute(
                 "SELECT crd_number, COUNT(DISTINCT ind_source_id) FROM ia_rep_firms "
-                "GROUP BY crd_number"
+                "WHERE ia_only = 'Y' GROUP BY crd_number"
             )
         }
         adv = {
@@ -126,16 +126,59 @@ def test_advisor_count_is_none_for_state_only_firm():
     assert all(r["advisor_count"] is None for r in state_only)
 
 
-def test_roster_counts_counts_distinct_people():
-    # One advisor linked to the same firm twice (two branches) is one person.
+def test_roster_counts_counts_distinct_advisers_only():
+    # One advisor linked to the same firm twice (two branches, or the adviser
+    # row plus the broker row of a dual registrant) is one person. A person
+    # with only ia_only = 'N' (broker-dealer) or a NULL flag is not counted.
     import sqlite3
 
     from advisorfinder_mcp import db
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE ia_rep_firms (ind_source_id TEXT, crd_number TEXT)")
+    conn.execute("CREATE TABLE ia_rep_firms (ind_source_id TEXT, crd_number TEXT, ia_only TEXT)")
     conn.executemany(
-        "INSERT INTO ia_rep_firms VALUES (?, ?)",
-        [("1", "A"), ("1", "A"), ("2", "A"), ("3", "B")],
+        "INSERT INTO ia_rep_firms VALUES (?, ?, ?)",
+        [
+            ("1", "A", "Y"), ("1", "A", "Y"), ("1", "A", "N"),  # dual: one person
+            ("2", "A", "Y"),
+            ("4", "A", "N"),  # broker-only: not counted
+            ("5", "A", None),  # unknown flag: not counted
+            ("3", "B", "Y"),
+            ("6", "C", "N"),  # broker-only firm: absent (callers default to 0)
+        ],
     )
     assert db.roster_counts(conn, ["A", "B", "C"]) == {"A": 2, "B": 1}
     assert db.roster_counts(conn, []) == {}
+
+
+# ── a CRD in both `firms` and `firms_state` is returned once ────────────────
+# Production has 139 such CRDs (e.g. 306770 came back twice, once with a
+# count and once with null). The fixture has none, so this test builds a copy
+# with one dual-listed firm.
+
+def test_crd_in_both_firms_and_firms_state_is_returned_once(tmp_path, monkeypatch):
+    import shutil
+    import sqlite3
+
+    from advisorfinder_mcp import db
+    copy = tmp_path / "dup.db"
+    shutil.copy(db.DB_PATH, copy)
+    conn = sqlite3.connect(copy)
+    conn.execute(
+        "INSERT INTO firms_state (crd_number, primary_name, address_city, address_state, aum_band) "
+        "SELECT crd_number, primary_name, address_city, address_state, aum_band "
+        "FROM firms WHERE crd_number = '100001'"
+    )
+    conn.execute(
+        "INSERT INTO firm_fts (name, crd_number, kind) "
+        "SELECT primary_name, crd_number, 'state' FROM firms WHERE crd_number = '100001'"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", copy)
+
+    for kwargs in ({"name": "alpha wealth"}, {"state": "NY", "limit": 50}):
+        result = server.search_firms(**kwargs)
+        rows = [r for r in result["results"] if r["crd"] == "100001"]
+        assert len(rows) == 1, kwargs
+        assert rows[0]["advisor_count"] is not None  # the `firms` row wins
+        assert "caveat" not in rows[0]

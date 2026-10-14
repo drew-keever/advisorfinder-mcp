@@ -19,7 +19,7 @@
 # wcwidth were added 2026-10-14; both are pure-Python wheels, so the 3.12
 # linux caveat above does not apply to them.
 #
-# To regenerate (bump the three top-level pins as needed):
+# To regenerate (bump the four top-level pins as needed):
 #   python3.12 -m venv /tmp/cvenv
 #   /tmp/cvenv/bin/pip install --upgrade pip
 #   /tmp/cvenv/bin/pip install ".[server]" fastmcp==3.4.8 mcp==1.30.0 boto3==1.43.112 ftfy==6.3.1
