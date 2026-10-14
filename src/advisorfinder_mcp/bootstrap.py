@@ -125,7 +125,7 @@ def ensure_db(client=None) -> Path:
     try:
         manifest = json.loads(manifest_obj["Body"].read())
         expected_sha = manifest["sha256"]
-        expected_size = manifest["sizeBytes"]
+        expected_size = int(manifest["sizeBytes"])
         manifest_schema_version = int(manifest["schemaVersion"])
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise RuntimeError(f"corrupt or incomplete manifest.json: {exc!r}") from exc
