@@ -4,7 +4,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: starter
+    plan: 1c-2g  # 1 CPU / 2 GB; 512 MB was OOM-killed ~every 6 days (2026-10-13)
     healthCheckPath: /health
     envVars:
       - key: R2_ACCOUNT_ID
