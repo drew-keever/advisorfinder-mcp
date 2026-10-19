@@ -621,7 +621,9 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     flagged — purely state-registered firms have no advisor rosters at all;
     state-listed firms showing rosters are dual-registered. Exact name matches
     rank first (the firm's own name, then an "also known as" name), then names
-    that start with the search text. A result can carry `advisor_count_note`
+    that start with the search text (own names before "also known as" names),
+    then other matches. Inside each group, firms with more advisors on file
+    come first. A result can carry `advisor_count_note`
     (no advisor records on file) or `unreadable_characters_note` (characters
     lost in the source data, shown as \ufffd).
     """

@@ -876,6 +876,57 @@ def test_title_case_firm_name_initialisms_are_whole_token_only(raw, expected):
     assert fmt.title_case_firm_name(raw) == expected
 
 
+@pytest.mark.parametrize("raw, expected", [
+    # US is the pronoun after ABOUT/FOR/WITH/TO/OF; the country elsewhere.
+    ("WHAT ABOUT US FINANCIAL LLC", "What About Us Financial LLC"),
+    ("WEALTH FOR US", "Wealth For Us"),
+    ("RECORD CURRENCY MANAGEMENT (US) INC", "Record Currency Management (US) Inc"),
+    ("AXA INVESTMENT MANAGERS US INC", "AXA Investment Managers US Inc"),
+    # ICE only as the name's first token.
+    ("ICE DATA PRICING & REFERENCE DATA, LLC", "ICE Data Pricing & Reference Data, LLC"),
+    ("POLERO ICE ADVISERS, L.L.C.", "Polero Ice Advisers, L.L.C."),
+    # CPA, MBA, PFS; parts split by "/", "," and "-".
+    ("ADI MAHAJAN CPA PC", "Adi Mahajan CPA PC"),
+    ("MYRNA MITCHELL, MBA, CFP", "Myrna Mitchell, MBA, CFP"),
+    ("JAMES C WANGERIN, CPA/PFS", "James C Wangerin, CPA/PFS"),
+    ("GEORGE PAPADOPOULOS, CPA/PFS,CFP", "George Papadopoulos, CPA/PFS,CFP"),
+    ("MBA ADVISORS LLC", "MBA Advisors LLC"),
+    # One letter & Co is a company, not two initials.
+    ("R&CO CM (NA)", "R&Co Cm (NA)"),
+    ("A&M CAPITAL", "A&M Capital"),
+    # 2-3 letter abbreviation that is the whole parenthesized text.
+    ("PINNACLE ASSOCIATES, INC. (NY)", "Pinnacle Associates, Inc. (NY)"),
+    ("KAINOS (TX) CAPITAL LP", "Kainos (TX) Capital LP"),
+    ("MERCATOR GP (DE) LLC", "Mercator GP (DE) LLC"),
+    ("LUBERT-ADLER PARTNERS (DBA)", "Lubert-Adler Partners (DBA)"),
+    ("FINANCIAL PLANNING GROUP INC. (THE)", "Financial Planning Group Inc. (The)"),
+    ("SMITH (RELYING ADVISER)", "Smith (Relying Adviser)"),
+    # First letter after a leading &, @, #, + or curly quote.
+    ("&PARTNERS", "&Partners"),
+    ("&wealth partners, llc", "&Wealth Partners, LLC"),
+    ("CAPONE &PARTNERS", "Capone &Partners"),
+    ("DUNCKER, STREETT &CO., LLC", "Duncker, Streett &Co., LLC"),
+    ("@FINANCIAL INVESTMENTS", "@Financial Investments"),
+    ("+RINGENBERG FINANCIAL GROUP", "+Ringenberg Financial Group"),
+    ("\u201cTHE FIRM\u201d LLC", "\u201cThe Firm\u201d LLC"),
+    # Roman numerals, also inside a token.
+    ("ABRY PARTNERS II, LLC", "Abry Partners II, LLC"),
+    ("BATTERY PARTNERS VIII (AIV), LLC", "Battery Partners VIII (AIV), LLC"),
+    ("ARES CLO MANAGEMENT XII, L.P.", "Ares Clo Management XII, L.P."),
+    ("ESSEX WOODLANDS FUND-IX GP, LP", "Essex Woodlands Fund-IX GP, LP"),
+    ("SEI-II MANAGEMENT", "SEI-II Management"),
+    ("CROW HOLDINGS VII-B, L.P.", "Crow Holdings VII-B, L.P."),
+    ("CORTEC INVESTMENT (III) L.L.C.", "Cortec Investment (III) L.L.C."),
+    ("CLASS VI VENTURES, LLC", "Class VI Ventures, LLC"),
+    ("VII CAPITAL MANAGEMENT LLC", "VII Capital Management LLC"),
+    ("VI-BHAKTI VENTURES", "Vi-Bhakti Ventures"),  # a word at the name start
+    ("DAVID X MARTIN, LLC", "David X Martin, LLC"),  # V and X are initials
+])
+def test_title_case_firm_name_context_rules(raw, expected):
+    assert fmt.title_case_firm_name(raw) == expected
+    assert fmt.title_case_firm_name(expected) == expected  # idempotent
+
+
 def test_title_case_firm_name_keeps_replacement_char():
     assert fmt.title_case_firm_name("M�TIER CAPITAL, LLC") == "M�tier Capital, LLC"
 
@@ -903,8 +954,9 @@ def test_firm_rank_key_drops_each_trailing_suffix(suffix):
 
 def test_firm_rank_key_suffix_list_is_explicit():
     assert set(fmt.FIRM_LEGAL_SUFFIXES) == {
-        "LLC", "L.L.C.", "INC", "INCORPORATED", "LP", "L.P.", "LLP", "LTD",
-        "CO", "CORP", "CORPORATION", "PLLC", "PC", "N.A.",
+        "LLC", "L.L.C.", "INC", "INCORPORATED", "LP", "L.P.", "LLP", "LLLP",
+        "LTD", "LIMITED", "CO", "COMPANY", "CORP", "CORPORATION", "PLLC", "PLC",
+        "PC", "PA", "P.A.", "N.A.",
     }
 
 
@@ -918,6 +970,15 @@ def test_firm_rank_key_suffix_list_is_explicit():
     ("Société Générale", "societe generale"),               # diacritics folded
     ("L.L.C.", "llc"),                                       # never stripped to empty
     ("Co Investors LLC", "co investors"),                    # only TRAILING suffixes
+    ("Smith Financial Planning, P.A.", "smith financial planning"),
+    ("SMITH FINANCIAL PLANNING PA", "smith financial planning"),
+    ("Barings Asset Management PLC", "barings asset management"),
+    ("Acme Partners, LLLP", "acme partners"),
+    ("Schroder Investment Management Limited", "schroder investment management"),
+    ("Capital Research and Management Company", "capital research and management"),
+    ("Company Limited", "company"),                          # first token always kept
+    ("P.A.", "pa"),
+    ("Limited Partners Co", "limited partners"),
     ("M�TIER CAPITAL, LLC", "m tier capital"),
     ("", ""),
     (None, ""),
@@ -946,6 +1007,14 @@ def test_firm_rank_key(raw, expected):
     ("   ", None),
     (None, None),
     (42, None),
+    # Whitespace after "/" is removed; any other internal whitespace means
+    # the value is not a working link.
+    ("www.linkedin.com/in/ philip-mcdonald", "https://www.linkedin.com/in/philip-mcdonald"),
+    ("https://example.com/ \tpage", "https://example.com/page"),
+    ("https://tswinvest.com (primary firm website)", None),
+    ("https://koonfinancial.com; https://www.linkedin.com/company/koon", None),
+    ("https://kingfishercapital.com/ legacy url", None),
+    ("https://saxony advisors- facebook", None),
 ])
 def test_normalize_url(raw, expected):
     assert fmt.normalize_url(raw) == expected

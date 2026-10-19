@@ -5,6 +5,7 @@ plumbing. server.py holds tool orchestration and consumer-facing wording;
 this module holds SQL (plus the one Python-side filter in search_marketplace,
 which matches against format.marketplace_search_text -- see its docstring).
 """
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,12 +20,19 @@ DB_PATH: Path | None = None
 # re-pointed DB_PATH never hands back another database's stale meta.
 _meta_cache: dict | None = None
 
+# all_roster_counts() result: (DB_PATH it was computed for, {crd: count}).
+# Keyed on the path as well as cleared by set_db_path(), so a DB_PATH that is
+# re-pointed directly (tests monkeypatch it) is never served stale counts.
+_roster_cache: tuple[Path, dict[str, int]] | None = None
+
 
 def set_db_path(path) -> None:
-    """Point the module at a DB file and invalidate the cached export_meta."""
-    global DB_PATH, _meta_cache
+    """Point the module at a DB file and invalidate the cached export_meta
+    and roster counts."""
+    global DB_PATH, _meta_cache, _roster_cache
     DB_PATH = Path(path)
     _meta_cache = None
+    _roster_cache = None
 
 
 # Case-insensitive (production stores ~70% of names mixed case, and BINARY
@@ -308,11 +316,15 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
 
     Ordering (applied to the FULL match set, before the limit): with a name,
     each CRD takes the best tier over all of its matched names (see
-    _firm_name_tier): exact primary/legal name first, then exact other
-    ("also known as") name, then names that start with the search text, then
-    the rest. Inside a tier, and in browse mode, the order is the name
-    (case-insensitive), then crd_number. `other_name` is the matched other
-    name with the best tier, so matched_as shows the name that matched best.
+    _firm_name_tier): exact own (primary/legal/state) name, exact other
+    ("also known as") name, own name that starts with the search text, other
+    name that starts with it, any other own-name match, other-name-only
+    match. Inside a tier the firm with the larger adviser roster comes first
+    (all_roster_counts(): public SEC roster data only; state-only firms count
+    0; marketplace membership is never a factor), then the name
+    (case-insensitive), then crd_number. Browse mode (no name) is ordered by
+    name, then crd_number. `other_name` is the matched other name with the
+    best tier, so matched_as shows the name that matched best.
     """
     with get_conn() as conn:
         hits: dict[str, dict] | None = None
@@ -324,23 +336,33 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
             else:
                 hits = {}
                 query_key = firm_rank_key(name)
-                rows = conn.execute(
+                # Plain tuples (no Row factory): this loop sees every match of
+                # a broad search ("llc" -> ~41k rows).
+                cur = conn.execute(
                     "SELECT crd_number, kind, name FROM firm_fts WHERE firm_fts MATCH ?", (q,)
-                ).fetchall()
+                )
+                cur.row_factory = None
                 key_cache: dict[str, str] = {}
-                for r in rows:
-                    entry = hits.setdefault(
-                        r["crd_number"],
-                        {"kinds": set(), "other_name": None, "other_rank": None, "tier": _TIER_REST},
-                    )
-                    entry["kinds"].add(r["kind"])
-                    hit_name = r["name"] or ""
-                    name_key = key_cache.get(hit_name)
-                    if name_key is None:
-                        name_key = key_cache[hit_name] = firm_rank_key(hit_name)
-                    tier = _firm_name_tier(name_key, query_key, r["kind"])
-                    entry["tier"] = min(entry["tier"], tier)
-                    if r["kind"] == "other":
+                for crd, kind, hit_name in cur.fetchall():
+                    entry = hits.get(crd)
+                    if entry is None:
+                        entry = hits[crd] = {
+                            "kinds": set(), "other_name": None, "other_rank": None,
+                            "tier": _TIER_REST_OTHER,
+                        }
+                    entry["kinds"].add(kind)
+                    hit_name = hit_name or ""
+                    is_other = kind == "other"
+                    if _could_start_with(hit_name, query_key):
+                        name_key = key_cache.get(hit_name)
+                        if name_key is None:
+                            name_key = key_cache[hit_name] = firm_rank_key(hit_name)
+                        tier = _firm_name_tier(name_key, query_key, is_other)
+                    else:
+                        tier = _TIER_REST_OTHER if is_other else _TIER_REST_OWN
+                    if tier < entry["tier"]:
+                        entry["tier"] = tier
+                    if is_other:
                         rank = (tier, hit_name.casefold(), hit_name)
                         if entry["other_rank"] is None or rank < entry["other_rank"]:
                             entry["other_rank"] = rank
@@ -348,9 +370,11 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                 if not hits:
                     return []
 
-        fsql = "SELECT * FROM firms WHERE 1=1"
+        # Only the columns used below: a broad name matches ~20k firms.
+        cols = "crd_number, primary_name, address_city, address_state, aum_band"
+        fsql = f"SELECT {cols} FROM firms WHERE 1=1"
         fparams: list = []
-        ssql = "SELECT * FROM firms_state WHERE 1=1"
+        ssql = f"SELECT {cols} FROM firms_state WHERE 1=1"
         sparams: list = []
         if hits is not None:
             crds = list(hits)
@@ -404,52 +428,95 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                 "tier": info["tier"],
             })
 
-        # Tier first (exact names before the rest -- see the docstring), so a
-        # broad name's exact match is never cut off by the limit; then a
-        # case-insensitive, deterministic order inside the tier.
-        results.sort(key=lambda r: (
-            r["tier"], (r["name"] or "").casefold(), r["name"] or "", r["crd_number"],
-        ))
+        # Roster-based advisor counts (see roster_counts), computed once per
+        # process for every firm. State-only firms have no roster: they keep
+        # advisor_count None and rank as 0.
+        counts = all_roster_counts(conn)
+        if hits is not None:
+            # Tier first (exact names before the rest -- see the docstring),
+            # so a broad name's exact match is never cut off by the limit;
+            # then the larger roster; then a case-insensitive, deterministic
+            # order.
+            def sort_key(r):
+                roster = 0 if r["state_only"] else counts.get(r["crd_number"], 0)
+                name_ = r["name"] or ""
+                return (r["tier"], -roster, name_.casefold(), name_, r["crd_number"])
+        else:
+            def sort_key(r):
+                name_ = r["name"] or ""
+                return (name_.casefold(), name_, r["crd_number"])
+        results.sort(key=sort_key)
         page = results[:limit]
-
-        # Roster-based advisor counts: ONE grouped query over the returned
-        # page (<= limit crds, so the IN list stays small), never per-row and
-        # never over the whole match set -- a state='NY' browse matches
-        # thousands of firms, nearly all of which the limit discards.
-        # State-only firms keep None: they have no roster at all.
-        sec_crds = [r["crd_number"] for r in page if not r["state_only"]]
-        if sec_crds:
-            counts = roster_counts(conn, sec_crds)
-            for r in page:
-                if not r["state_only"]:
-                    r["advisor_count"] = counts.get(r["crd_number"], 0)
+        for r in page:
+            if not r["state_only"]:
+                r["advisor_count"] = counts.get(r["crd_number"], 0)
         return page
 
 
-# search_firms name tiers (lower ranks first).
-_TIER_EXACT_PRIMARY = 0  # primary or legal name equals the search text
-_TIER_EXACT_OTHER = 1    # an other ("also known as") name equals it
-_TIER_PREFIX = 2         # any matched name starts with it
-_TIER_REST = 3
+# search_firms name tiers (lower ranks first). "Own" names are the firm's
+# primary, legal and state-registration names (firm_fts kinds primary/legal/
+# state); "other" names are prior or "also known as" names.
+_TIER_EXACT_OWN = 0     # an own name equals the search text
+_TIER_EXACT_OTHER = 1   # an other name equals it
+_TIER_PREFIX_OWN = 2    # an own name starts with it
+_TIER_PREFIX_OTHER = 3  # an other name starts with it
+_TIER_REST_OWN = 4      # an own name matched (full-text) some other way
+_TIER_REST_OTHER = 5    # only other names matched
 
-# Browse mode (no name filter): one tier for every row, so the order is by name.
+# Browse mode (no name filter): no tier; the order is by name.
 _BROWSE_PRIMARY = {"kinds": frozenset({"primary"}), "other_name": None, "tier": 0}
 _BROWSE_STATE = {"kinds": frozenset({"state"}), "other_name": None, "tier": 0}
 
+# First letter or digit of a name.
+_FIRST_ALNUM_RE = re.compile(r"[A-Za-z0-9]")
 
-def _firm_name_tier(name_key: str, query_key: str, kind: str) -> int:
-    """Tier of one matched firm_fts name. Both arguments are
+
+def _could_start_with(hit_name: str, query_key: str) -> bool:
+    """False only when firm_rank_key(hit_name) certainly does not start with
+    query_key, so _firm_name_tier() cannot return an exact or prefix tier.
+    A cheap pre-check that skips most normalizations on broad searches. For
+    an ASCII name, the first character of its rank key is its first letter
+    or digit, lowercased (firm_rank_key drops punctuation and keeps the first
+    token). Non-ASCII names always take the full check."""
+    if not query_key:
+        return False
+    if not hit_name.isascii():
+        return True
+    m = _FIRST_ALNUM_RE.search(hit_name)
+    return m is not None and m.group().lower() == query_key[0]
+
+
+def _firm_name_tier(name_key: str, query_key: str, is_other: bool) -> int:
+    """Tier of one matched firm_fts name. Both keys are
     format.firm_rank_key() values (case, diacritics, punctuation and trailing
-    legal suffixes already normalized away). `kind` is the firm_fts kind:
-    primary/legal/state rows are the firm's own names, "other" rows are
-    prior or "also known as" names."""
-    if not query_key or not name_key:
-        return _TIER_REST
-    if name_key == query_key:
-        return _TIER_EXACT_OTHER if kind == "other" else _TIER_EXACT_PRIMARY
-    if name_key.startswith(query_key):
-        return _TIER_PREFIX
-    return _TIER_REST
+    legal suffixes already normalized away). `is_other` is True for an
+    "other" (prior / also known as) name."""
+    if query_key and name_key:
+        if name_key == query_key:
+            return _TIER_EXACT_OTHER if is_other else _TIER_EXACT_OWN
+        if name_key.startswith(query_key):
+            return _TIER_PREFIX_OTHER if is_other else _TIER_PREFIX_OWN
+    return _TIER_REST_OTHER if is_other else _TIER_REST_OWN
+
+
+def all_roster_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """{crd: roster count} for EVERY firm with at least one adviser (same
+    definition as roster_counts: distinct ind_source_id, ia_only = 'Y'),
+    from one grouped query, cached for the life of the process per DB_PATH.
+    Production: ~10k entries, under 1 MB, ~0.4 s once. search_firms uses it
+    to rank inside a tier and for the returned advisor_count."""
+    global _roster_cache
+    cached = _roster_cache
+    if cached is not None and cached[0] == DB_PATH:
+        return cached[1]
+    cur = conn.execute(
+        "SELECT crd_number, COUNT(DISTINCT ind_source_id) FROM ia_rep_firms "
+        "WHERE ia_only = 'Y' GROUP BY crd_number"
+    )
+    cur.row_factory = None
+    counts = dict(cur.fetchall())
+    _roster_cache = (DB_PATH, counts)
+    return counts
 
 
 def roster_counts(conn: sqlite3.Connection, crds: list[str]) -> dict[str, int]:

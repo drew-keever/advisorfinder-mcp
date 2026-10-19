@@ -190,7 +190,9 @@ def test_crd_in_both_firms_and_firms_state_is_returned_once(tmp_path, monkeypatc
 # "WEALTH ENHANCEMENT GROUP, LLC". These tests build a copy of the fixture with
 # that shape (the committed .db files are never edited).
 
-def _copy_with(tmp_path, monkeypatch, firms=(), state_firms=(), other_names=(), locations=()):
+def _copy_with(
+    tmp_path, monkeypatch, firms=(), state_firms=(), other_names=(), locations=(), rosters=(),
+):
     import shutil
     import sqlite3
 
@@ -217,6 +219,15 @@ def _copy_with(tmp_path, monkeypatch, firms=(), state_firms=(), other_names=(), 
         conn.execute(
             "INSERT INTO firm_locations (crd_number, location_type, street1, city, state, private_res) "
             "VALUES (?, 'branch', ?, ?, 'XX', 'N')", (crd, street1, city),
+        )
+    for crd, n in rosters:  # n distinct advisers (ia_only 'Y') plus one broker-only row
+        conn.executemany(
+            "INSERT INTO ia_rep_firms (ind_source_id, crd_number, ia_only) VALUES (?, ?, 'Y')",
+            [(f"r{crd}-{i}", crd) for i in range(n)],
+        )
+        conn.execute(
+            "INSERT INTO ia_rep_firms (ind_source_id, crd_number, ia_only) VALUES (?, ?, 'N')",
+            (f"b{crd}", crd),
         )
     conn.commit()
     conn.close()
@@ -310,3 +321,108 @@ def test_unreadable_characters_note_only_when_shown_text_has_fffd(tmp_path, monk
     assert "�" in by_crd["900042"]["matched_as"]
     assert "unreadable_characters_note" in by_crd["900042"]
     assert "unreadable_characters_note" not in by_crd["100003"]
+
+
+# ── own names before other names; larger roster first inside a tier ─────────
+# Production: "Merrill" ranked BlackRock (other name "Merrill Lynch Global
+# Securities Financing") above Merrill Lynch, Pierce, Fenner & Smith (CRD
+# 7691, 25,660 advisers), and "Schwab" ranked Charles Schwab & Co. below
+# smaller firms in the same tier.
+
+def test_own_name_tiers_rank_above_other_name_tiers(tmp_path, monkeypatch):
+    _copy_with(
+        tmp_path, monkeypatch,
+        firms=[
+            ("900051", "BIGROCK INVESTMENT MANAGEMENT, LLC", "X", "NY"),
+            ("900052", "MERRILL LYNCH, PIERCE, FENNER & SMITH INCORPORATED", "X", "NY"),
+            ("900053", "THE MERRILL GROUP", "X", "NY"),
+            ("900054", "OTHERWISE ADVISORS", "X", "NY"),
+        ],
+        other_names=[
+            ("900051", "MERRILL LYNCH GLOBAL SECURITIES FINANCING"),  # other-name prefix
+            ("900054", "SMITH MERRILL PARTNERS"),                      # other-name rest
+        ],
+        # The other-name hits have the larger rosters: tier still wins.
+        rosters=[("900051", 50), ("900052", 5), ("900053", 1), ("900054", 60)],
+    )
+    result = server.search_firms(name="Merrill")
+    assert [r["crd"] for r in result["results"]] == [
+        "900052",  # own name starts with the search text
+        "900051",  # other name starts with it
+        "900053",  # own name contains it
+        "900054",  # other name contains it
+    ]
+
+
+def test_larger_roster_ranks_first_inside_a_tier(tmp_path, monkeypatch):
+    _copy_with(
+        tmp_path, monkeypatch,
+        firms=[
+            ("900061", "SCHWAB ALPHA ADVISORS", "X", "NY"),
+            ("900062", "SCHWAB BETA ADVISORS", "X", "NY"),
+            ("900063", "SCHWAB GAMMA ADVISORS", "X", "NY"),
+            ("900065", "SCHWAB ZETA ADVISORS", "X", "NY"),
+        ],
+        state_firms=[("900064", "SCHWAB DELTA ADVISORS", "X", "NY")],
+        rosters=[("900062", 30), ("900063", 7), ("900065", 7)],
+    )
+    result = server.search_firms(name="schwab")
+    rows = result["results"]
+    assert [r["crd"] for r in rows] == [
+        "900062",  # 30 advisers
+        "900063",  # 7, then by name
+        "900065",  # 7
+        "900061",  # 0 (SEC, empty roster), by name before the state-only firm
+        "900064",  # state-only counts as 0
+    ]
+    assert [r["advisor_count"] for r in rows] == [30, 7, 7, 0, None]
+
+
+def test_roster_counts_are_cached_once_per_db(tmp_path, monkeypatch):
+    from advisorfinder_mcp import db
+    calls = []
+    real = db.all_roster_counts
+
+    def counting(conn):
+        before = db._roster_cache
+        result = real(conn)
+        if db._roster_cache is not before:
+            calls.append(db.DB_PATH)
+        return result
+
+    monkeypatch.setattr(db, "all_roster_counts", counting)
+    monkeypatch.setattr(db, "_roster_cache", None)
+    server.search_firms(name="alpha wealth")
+    server.search_firms(name="beta")
+    assert calls == [db.DB_PATH]  # computed once, then reused
+    # A different DB_PATH (tests re-point it directly) is never served the
+    # old counts.
+    copy = _copy_with(tmp_path, monkeypatch, rosters=[("100003", 4)])
+    result = server.search_firms(limit=50)
+    assert {r["crd"]: r for r in result["results"]}["100003"]["advisor_count"] == 4
+    assert calls[-1] == copy
+
+
+def test_browse_order_ignores_roster(tmp_path, monkeypatch):
+    _copy_with(
+        tmp_path, monkeypatch,
+        firms=[("900071", "ALPHA WY ADVISORS", "X", "WY"), ("900072", "BRAVO WY ADVISORS", "X", "WY")],
+        rosters=[("900072", 99)],
+    )
+    result = server.search_firms(state="WY")
+    assert [r["crd"] for r in result["results"]] == ["900071", "900072"]
+
+
+def test_marketplace_membership_is_not_a_ranking_factor():
+    # CLAUDE.md: marketplace affiliation is a label, never a ranking factor.
+    # The firm ranking reads only firm_fts, firms, firms_state and the roster.
+    import ast
+    import inspect
+    import textwrap
+
+    from advisorfinder_mcp import db
+    for fn in (db.search_firms, db._firm_name_tier, db.all_roster_counts):
+        node = ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
+        if ast.get_docstring(node) is not None:
+            node.body = node.body[1:]  # the docstring may say "never a factor"
+        assert "marketplace" not in ast.unparse(node).lower(), fn.__name__

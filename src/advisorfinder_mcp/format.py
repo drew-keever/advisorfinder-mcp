@@ -67,71 +67,121 @@ def title_case_name(s: str | None) -> str | None:
 _FIRM_ACRONYMS = {"LLC", "LLP", "LLLP", "LP", "PLLC", "PLC", "PC", "PA"}
 
 # Initialisms kept uppercase in firm names ("LPL Financial", not "Lpl
-# Financial"). Matched against a WHOLE token (or one hyphen/slash-separated
-# part of a token) with surrounding punctuation removed, never as a substring,
-# so "Rice" or "Tdx" are never touched. Only tokens that are not ordinary
-# English words or common surnames belong here; "Inc."/"Ltd"/"Corp." keep
-# their title case on purpose. ICE is a judgment call: it is the exchange
-# operator in "ICE Data Pricing", but could be a word in another name.
+# Financial"). Matched against a WHOLE token (or one hyphen/slash/comma-
+# separated part of a token) with surrounding punctuation removed, never as a
+# substring, so "Rice" or "Tdx" are never touched. Only tokens that are not
+# ordinary English words or common surnames belong here; "Inc."/"Ltd"/"Corp."
+# keep their title case on purpose. Two entries have a context rule in
+# _firm_token_case: ICE (the exchange operator, "ICE Data Pricing") only as
+# the first token of the name; US not after a word that makes it the pronoun
+# ("What About Us Financial").
 _FIRM_INITIALISMS = frozenset({
     "AAM", "AE", "AIP", "ALM", "AQR", "ASB", "AST", "AXA", "BB&T", "BBR",
     "BBVA", "BD", "BDC", "BDT", "BFC", "BFG", "BMO", "BNP", "BNY", "BOK",
-    "BTG", "CBIZ", "CFI", "CFP", "CG", "CIBC", "CIFC", "CREF", "CVC", "CW",
-    "CWA", "CWM", "CX", "DBX", "DLJ", "DWS", "ECP", "EFS", "EP", "ESI", "ETF",
-    "FBL", "FIAM", "GC", "GCM", "GP", "GTCR", "GW&K", "GWN", "HB", "HBK",
-    "HBKS", "HBW", "HK", "HPS", "HSBC", "ICE", "IEQ", "IFG", "IFM", "IFP",
-    "IHT", "IP", "IPI", "JMG", "KFG", "KKR", "KSL", "LNW", "LPL", "LSV",
-    "MDT", "MDTA", "MFS", "MMA", "MML", "MWA", "NB", "NBC", "NEPC", "NFSG",
-    "NISA", "NLG", "NPA", "NWAM", "NWF", "PFG", "PFS", "PGIM", "PKS", "PMC",
-    "PNC", "PPM", "PTMA", "RBC", "RFG", "RMR", "RWA", "SCS", "SEI", "SEIA",
-    "SLC", "SPC", "SSGA", "SVB", "TCW", "TD", "TIAA", "TLG", "TPG", "UBS",
-    "UK", "US", "USA", "USAA", "WCG", "WCM",
+    "BTG", "CBIZ", "CFI", "CFP", "CG", "CIBC", "CIFC", "CPA", "CREF", "CVC",
+    "CW", "CWA", "CWM", "CX", "DBX", "DLJ", "DWS", "ECP", "EFS", "EP", "ESI",
+    "ETF", "FBL", "FIAM", "GC", "GCM", "GP", "GTCR", "GW&K", "GWN", "HB",
+    "HBK", "HBKS", "HBW", "HK", "HPS", "HSBC", "ICE", "IEQ", "IFG", "IFM",
+    "IFP", "IHT", "IP", "IPI", "JMG", "KFG", "KKR", "KSL", "LNW", "LPL",
+    "LSV", "MBA", "MDT", "MDTA", "MFS", "MMA", "MML", "MWA", "NB", "NBC",
+    "NEPC", "NFSG", "NISA", "NLG", "NPA", "NWAM", "NWF", "PFG", "PFS", "PGIM",
+    "PKS", "PMC", "PNC", "PPM", "PTMA", "RBC", "RFG", "RMR", "RWA", "SCS",
+    "SEI", "SEIA", "SLC", "SPC", "SSGA", "SVB", "TCW", "TD", "TIAA", "TLG",
+    "TPG", "UBS", "UK", "US", "USA", "USAA", "WCG", "WCM",
 })
+# "Us" is the pronoun, not "US", after these words.
+_US_PRONOUN_AFTER = frozenset({"ABOUT", "FOR", "WITH", "TO", "OF"})
+# Fund-series roman numerals ("Partners VII", "Fund-IX"). title_case_name()
+# already uppercases a whole-word II/III/IV; this also covers VI..XII and a
+# numeral inside a token ("Sei-II", "(III)"). At the very start of the name
+# only a 3-4 letter numeral (VII, VIII) counts: "Vi-Bhakti Ventures" is a
+# word. V and X are left alone: as one letter they are also initials
+# ("David X Martin").
+_ROMAN_NUMERALS = frozenset({"II", "III", "IV", "VI", "VII", "VIII", "IX", "XI", "XII"})
+# A 2-3 letter word that is the whole content of parentheses is an
+# abbreviation ("(NY)", "(UK)", "(GP)", "(DBA)"), except these words.
+_PAREN_WORDS = frozenset({"THE", "AND", "FOR", "OF", "AN", "LTD", "INC", "CO"})
 
 # A token made only of single letters each followed by a dot ("J.P.",
 # "U.S.", "N.A.", "B.o.s.s."), the final dot optional ("A.g.p").
 _DOTTED_INITIALS_RE = re.compile(r"(?:[A-Za-z]\.)+[A-Za-z]?")
 # One or two letters on each side of "&" ("H&H", "L&G", "S&P").
 _AMPERSAND_INITIALS_RE = re.compile(r"[A-Za-z]{1,2}&[A-Za-z]{1,2}")
+# One letter, "&", "Co" ("R&Co"): a company, not two initials.
+_AMPERSAND_CO_RE = re.compile(r"([A-Za-z])&co", re.IGNORECASE)
 # Leading / trailing punctuation around a token's core. The trailing class
-# has no "." so the dotted-initials rule still sees "J.P.".
-_TOKEN_SPLIT_RE = re.compile(r"^([(\[\"']*)(.*?)([)\]\"',;:]*)$")
+# has no "." so the dotted-initials rule still sees "J.P.". The leading class
+# includes & @ # + and curly quotes so "&PARTNERS" becomes "&Partners".
+_TOKEN_SPLIT_RE = re.compile("^([(\\[\"'&@#+\u201c\u2018]*)(.*?)([)\\]\"',;:\u201d\u2019]*)$")
+# Separators inside a token's core ("Cpa/Pfs,Cfp", "Sei-II").
+_PART_SPLIT_RE = re.compile(r"([-/,])")
 
 
-def _upper_initialism_part(part: str) -> str:
+def _upper_initialism_part(
+    part: str, allow_ice: bool, us_is_pronoun: bool, name_start: bool,
+) -> str:
     core = part.rstrip(".")
-    if core.upper() in _FIRM_INITIALISMS or _AMPERSAND_INITIALS_RE.fullmatch(core):
-        return core.upper() + part[len(core):]
+    upper = core.upper()
+    if _AMPERSAND_CO_RE.fullmatch(core):
+        return core[0].upper() + "&Co" + part[len(core):]
+    if upper == "ICE" and not allow_ice:
+        return part
+    if upper == "US" and us_is_pronoun:
+        return part
+    if (upper in _FIRM_INITIALISMS
+            or (upper in _ROMAN_NUMERALS and (not name_start or len(upper) > 2))
+            or _AMPERSAND_INITIALS_RE.fullmatch(core)):
+        return upper + part[len(core):]
     return part
 
 
-def _firm_token_case(tok: str) -> str:
+def _firm_token_case(tok: str, first: bool = False, prev: str = "") -> str:
+    """One token of title_case_name() output. `first`: it is the name's first
+    token. `prev`: the previous token (any case)."""
     if tok.strip(",.").replace(".", "").upper() in _FIRM_ACRONYMS:
         return tok.upper()
     lead, core, trail = _TOKEN_SPLIT_RE.match(tok).groups()
     if not core:
         return tok
     if lead and core[0].islower():
-        # capitalize() in title_case_name() saw the quote/parenthesis as the
-        # first character: '"tate' -> '"Tate', '(ny)' -> '(Ny)'.
+        # capitalize() in title_case_name() saw the quote/parenthesis/"&" as
+        # the first character: '"tate' -> '"Tate', '&partners' -> '&Partners'.
         core = core[0].upper() + core[1:]
     if _DOTTED_INITIALS_RE.fullmatch(core.rstrip(".")):
         return lead + core.upper() + trail
-    core = "-".join(
-        "/".join(_upper_initialism_part(p) for p in piece.split("/"))
-        for piece in core.split("-")
+    if (lead.endswith("(") and trail.startswith(")") and 2 <= len(core) <= 3
+            and core.isalpha() and core.isascii() and core.upper() not in _PAREN_WORDS):
+        return lead + core.upper() + trail
+    prev_core = _TOKEN_SPLIT_RE.match(prev).group(2).rstrip(".").upper() if prev else ""
+    us_is_pronoun = prev_core in _US_PRONOUN_AFTER
+    parts = _PART_SPLIT_RE.split(core)
+    core = "".join(
+        p if i % 2 else _upper_initialism_part(
+            p,
+            allow_ice=first and len(parts) == 1,
+            us_is_pronoun=us_is_pronoun,
+            name_start=first and i == 0,
+        )
+        for i, p in enumerate(parts)
     )
     return lead + core + trail
 
 
 def title_case_firm_name(s: str | None) -> str | None:
-    """title_case_name() plus three firm-name rules: legal-entity designators
-    stay uppercase (LLC, L.P.), dotted initials stay uppercase (J.P., U.S.,
-    N.A.), and listed initialisms stay uppercase (LPL, UBS, KKR). Idempotent."""
+    """title_case_name() plus firm-name rules: legal-entity designators stay
+    uppercase (LLC, L.P.), dotted initials stay uppercase (J.P., U.S., N.A.),
+    listed initialisms (LPL, UBS, KKR), fund-series roman numerals (VII) and
+    a 2-3 letter abbreviation in parentheses ("(NY)") are uppercased, "R&co"
+    becomes "R&Co", and the first letter after a leading quote, parenthesis,
+    "&", "@", "#" or "+" is capitalized. Idempotent."""
     cased = title_case_name(s)
     if not cased:
         return cased
-    return " ".join(_firm_token_case(tok) for tok in cased.split(" "))
+    toks = cased.split(" ")
+    return " ".join(
+        _firm_token_case(tok, first=(i == 0), prev=toks[i - 1] if i else "")
+        for i, tok in enumerate(toks)
+    )
 
 
 # ── unreadable characters (U+FFFD) in firm data ─────────────────────────────
@@ -163,12 +213,17 @@ def has_unreadable_chars(*values) -> bool:
 # "name:" at the start of the value. A digit after the colon is a port
 # ("localhost:8080"), not a scheme.
 _URL_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):(?!\d)")
+_SLASH_SPACE_RE = re.compile(r"/\s+")
+_ANY_SPACE_RE = re.compile(r"\s")
 
 
 def normalize_url(value) -> str | None:
     """A link safe to hand to a client, or None.
 
-    Strips surrounding whitespace; empty -> None. A value that already has an
+    Strips surrounding whitespace; empty -> None. Whitespace directly after
+    a "/" is removed ("linkedin.com/in/ jane" -> "linkedin.com/in/jane"); a
+    value that still contains whitespace is not a working link -> None
+    ("https://x.com (primary firm website)"). A value that already has an
     http:// or https:// scheme (any letter case) is returned unchanged. Any
     other scheme ("javascript:", "mailto:", "ftp:") -> None. A value with no
     scheme gets "https://" in front ("linkedin.com/in/x" ->
@@ -176,8 +231,8 @@ def normalize_url(value) -> str | None:
     else is changed: no lowercasing, no percent-encoding ("®" stays)."""
     if not isinstance(value, str):
         return None
-    url = value.strip()
-    if not url:
+    url = _SLASH_SPACE_RE.sub("/", value.strip())
+    if not url or _ANY_SPACE_RE.search(url):
         return None
     match = _URL_SCHEME_RE.match(url)
     if match:
@@ -777,8 +832,9 @@ def name_rank_tokens(raw: str | None) -> list[str]:
 # LLC". Written as they appear in filings; firm_rank_key() normalizes them the
 # same way it normalizes names (dots removed: "L.L.C." -> "llc").
 FIRM_LEGAL_SUFFIXES = (
-    "LLC", "L.L.C.", "INC", "INCORPORATED", "LP", "L.P.", "LLP", "LTD",
-    "CO", "CORP", "CORPORATION", "PLLC", "PC", "N.A.",
+    "LLC", "L.L.C.", "INC", "INCORPORATED", "LP", "L.P.", "LLP", "LLLP",
+    "LTD", "LIMITED", "CO", "COMPANY", "CORP", "CORPORATION", "PLLC", "PLC",
+    "PC", "PA", "P.A.", "N.A.",
 )
 _RANK_DROP = str.maketrans("", "", ".'\u2019")  # removed: "J.P." -> "jp"
 _RANK_SPACE_RE = re.compile(r"[^\w\s]|_", re.UNICODE)  # other punctuation -> space
