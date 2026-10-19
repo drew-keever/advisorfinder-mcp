@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import SCHEMA_VERSION
-from .format import fts_query, marketplace_search_text, name_rank_tokens
+from .format import firm_rank_key, fts_query, marketplace_search_text, name_rank_tokens
 
 # Set by bootstrap.ensure_db() (or directly by tests) before any query runs.
 DB_PATH: Path | None = None
@@ -305,6 +305,14 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
     (typically small — actual search hits), not by table size, so it doesn't
     carry the same "too many SQL variables" risk as search_advisors' id sets
     did before that was fixed.
+
+    Ordering (applied to the FULL match set, before the limit): with a name,
+    each CRD takes the best tier over all of its matched names (see
+    _firm_name_tier): exact primary/legal name first, then exact other
+    ("also known as") name, then names that start with the search text, then
+    the rest. Inside a tier, and in browse mode, the order is the name
+    (case-insensitive), then crd_number. `other_name` is the matched other
+    name with the best tier, so matched_as shows the name that matched best.
     """
     with get_conn() as conn:
         hits: dict[str, dict] | None = None
@@ -315,14 +323,28 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                 name = None
             else:
                 hits = {}
+                query_key = firm_rank_key(name)
                 rows = conn.execute(
                     "SELECT crd_number, kind, name FROM firm_fts WHERE firm_fts MATCH ?", (q,)
                 ).fetchall()
+                key_cache: dict[str, str] = {}
                 for r in rows:
-                    entry = hits.setdefault(r["crd_number"], {"kinds": set(), "other_name": None})
+                    entry = hits.setdefault(
+                        r["crd_number"],
+                        {"kinds": set(), "other_name": None, "other_rank": None, "tier": _TIER_REST},
+                    )
                     entry["kinds"].add(r["kind"])
+                    hit_name = r["name"] or ""
+                    name_key = key_cache.get(hit_name)
+                    if name_key is None:
+                        name_key = key_cache[hit_name] = firm_rank_key(hit_name)
+                    tier = _firm_name_tier(name_key, query_key, r["kind"])
+                    entry["tier"] = min(entry["tier"], tier)
                     if r["kind"] == "other":
-                        entry["other_name"] = r["name"]
+                        rank = (tier, hit_name.casefold(), hit_name)
+                        if entry["other_rank"] is None or rank < entry["other_rank"]:
+                            entry["other_rank"] = rank
+                            entry["other_name"] = hit_name
                 if not hits:
                     return []
 
@@ -346,7 +368,7 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
         results = []
         for frow in conn.execute(fsql, fparams).fetchall():
             crd = frow["crd_number"]
-            info = hits[crd] if hits is not None else {"kinds": {"primary"}, "other_name": None}
+            info = hits[crd] if hits is not None else _BROWSE_PRIMARY
             results.append({
                 "crd_number": crd,
                 "name": frow["primary_name"],
@@ -361,13 +383,14 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                 "kinds": info["kinds"],
                 "other_name": info["other_name"],
                 "state_only": False,
+                "tier": info["tier"],
             })
         sec_returned = {r["crd_number"] for r in results}
         for srow in conn.execute(ssql, sparams).fetchall():
             crd = srow["crd_number"]
             if crd in sec_returned:
                 continue  # dual-listed: the `firms` row above already covers it
-            info = hits[crd] if hits is not None else {"kinds": {"state"}, "other_name": None}
+            info = hits[crd] if hits is not None else _BROWSE_STATE
             results.append({
                 "crd_number": crd,
                 "name": srow["primary_name"],
@@ -378,9 +401,15 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                 "kinds": info["kinds"],
                 "other_name": info["other_name"],
                 "state_only": True,
+                "tier": info["tier"],
             })
 
-        results.sort(key=lambda r: r["name"] or "")
+        # Tier first (exact names before the rest -- see the docstring), so a
+        # broad name's exact match is never cut off by the limit; then a
+        # case-insensitive, deterministic order inside the tier.
+        results.sort(key=lambda r: (
+            r["tier"], (r["name"] or "").casefold(), r["name"] or "", r["crd_number"],
+        ))
         page = results[:limit]
 
         # Roster-based advisor counts: ONE grouped query over the returned
@@ -395,6 +424,32 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                 if not r["state_only"]:
                     r["advisor_count"] = counts.get(r["crd_number"], 0)
         return page
+
+
+# search_firms name tiers (lower ranks first).
+_TIER_EXACT_PRIMARY = 0  # primary or legal name equals the search text
+_TIER_EXACT_OTHER = 1    # an other ("also known as") name equals it
+_TIER_PREFIX = 2         # any matched name starts with it
+_TIER_REST = 3
+
+# Browse mode (no name filter): one tier for every row, so the order is by name.
+_BROWSE_PRIMARY = {"kinds": frozenset({"primary"}), "other_name": None, "tier": 0}
+_BROWSE_STATE = {"kinds": frozenset({"state"}), "other_name": None, "tier": 0}
+
+
+def _firm_name_tier(name_key: str, query_key: str, kind: str) -> int:
+    """Tier of one matched firm_fts name. Both arguments are
+    format.firm_rank_key() values (case, diacritics, punctuation and trailing
+    legal suffixes already normalized away). `kind` is the firm_fts kind:
+    primary/legal/state rows are the firm's own names, "other" rows are
+    prior or "also known as" names."""
+    if not query_key or not name_key:
+        return _TIER_REST
+    if name_key == query_key:
+        return _TIER_EXACT_OTHER if kind == "other" else _TIER_EXACT_PRIMARY
+    if name_key.startswith(query_key):
+        return _TIER_PREFIX
+    return _TIER_REST
 
 
 def roster_counts(conn: sqlite3.Connection, crds: list[str]) -> dict[str, int]:

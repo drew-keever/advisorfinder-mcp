@@ -572,10 +572,12 @@ def find_bookable_advisors(
             "virtual_meetings_offered": row["virtualMeetingsOffered"],
             "allowed_states": format.marketplace_states(row["allowedStates"]),
             "member_since": row["memberSince"],
-            "website": row["advisorWebsiteURL"],
-            "linkedin": row["linkedInURL"],
-            "twitter": row["twitterURL"],
-            "bio_video": row["bioVideoLink"],
+            # Links: "https://" added when the profile omits a scheme; any
+            # non-http(s) scheme is dropped (format.normalize_url).
+            "website": format.normalize_url(row["advisorWebsiteURL"]),
+            "linkedin": format.normalize_url(row["linkedInURL"]),
+            "twitter": format.normalize_url(row["twitterURL"]),
+            "bio_video": format.normalize_url(row["bioVideoLink"]),
             "education": format.marketplace_education(row["education"]),
             "self_reported": {
                 "aum": row["aum"],
@@ -599,6 +601,13 @@ def find_bookable_advisors(
     return format.envelope(payload)
 
 
+# Short per-result form of get_firm's empty-roster caveat (same meaning).
+_NO_ROSTER_NOTE = (
+    "No individual advisor records on file for this firm; this does not "
+    "necessarily mean it has no advisors. Check the firm's SEC IAPD record (link)."
+)
+
+
 @mcp.tool(title="Search firms", annotations=_read_only("Search firms"))
 def search_firms(name: str | None = None, state: str | None = None, limit: int = 20) -> dict:
     """Search SEC- and state-registered investment adviser FIRMS by name
@@ -610,7 +619,11 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     which have no roster), and a link to the firm's SEC IAPD record.
     State-registered-only firms (not SEC-registered) are included but
     flagged — purely state-registered firms have no advisor rosters at all;
-    state-listed firms showing rosters are dual-registered.
+    state-listed firms showing rosters are dual-registered. Exact name matches
+    rank first (the firm's own name, then an "also known as" name), then names
+    that start with the search text. A result can carry `advisor_count_note`
+    (no advisor records on file) or `unreadable_characters_note` (characters
+    lost in the source data, shown as \ufffd).
     """
     unsanitizable = _unsanitizable_supplied_filter(name=name)
     if unsanitizable:
@@ -632,6 +645,10 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
         }
         if r["kinds"] == {"other"} and r["other_name"]:
             entry["matched_as"] = f"also known as {format.title_case_firm_name(r['other_name'])}"
+        if not r["state_only"] and r["advisor_count"] == 0:
+            entry["advisor_count_note"] = _NO_ROSTER_NOTE
+        if format.has_unreadable_chars(entry["name"], entry["city"], entry.get("matched_as")):
+            entry["unreadable_characters_note"] = format.UNREADABLE_CHARS_NOTE
         if r["state_only"]:
             entry["caveat"] = (
                 "State-registered adviser — advisor rosters cover SEC-registered "
@@ -700,6 +717,8 @@ def get_firm(crd: str) -> dict:
             "advisor_count": None,
             "states_approved": _split_states(s["states_approved"]),
         }
+        if format.has_unreadable_chars(payload["name"], payload["city"]):
+            caveats.append(format.UNREADABLE_CHARS_CAVEAT)
         return format.envelope(payload, caveats=caveats, verify=_firm_verify_links(crd))
 
     f = bundle["firm"]
@@ -759,7 +778,7 @@ def get_firm(crd: str) -> dict:
             "state": f["address_state"],
             "zip": f["address_zip"],
         },
-        "website": f["website_clean"],
+        "website": format.normalize_url(f["website_clean"]),
         "aum_band": f["aum_band"],
         "total_employees": f["total_employees"],
         "advisor_count": bundle["roster_count"],
@@ -778,6 +797,15 @@ def get_firm(crd: str) -> dict:
         # shipped key do not break.
         "advisor_roster_count": bundle["roster_count"],
     }
+    # Lost characters (U+FFFD) are shown as they are and labeled, never
+    # guessed. Checks every returned name/address field.
+    if format.has_unreadable_chars(
+        payload["name"], payload["legal_name"],
+        payload["address"]["street1"], payload["address"]["city"],
+        *other_names,
+        *(loc.get(k) for loc in locations for k in ("street1", "city", "address")),
+    ):
+        caveats.append(format.UNREADABLE_CHARS_CAVEAT)
     return format.envelope(payload, caveats=caveats, verify=_firm_verify_links(crd))
 
 

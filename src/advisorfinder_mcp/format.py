@@ -25,7 +25,7 @@ def advisorfinder_profile_url(row_or_none: Any) -> str:
     is a marketplace_advisors row (or any row-like object with a truthy
     `profile_url` column/key), else the generic advisorfinder.com homepage.
     Works with dict, sqlite3.Row, or None (via _row_value, defined below)."""
-    url = _row_value(row_or_none, "profile_url")
+    url = normalize_url(_row_value(row_or_none, "profile_url"))
     return url if url else advisorfinder_url()
 
 
@@ -66,15 +66,125 @@ def title_case_name(s: str | None) -> str | None:
 # "Llc"). Compared with dots/commas stripped so "L.P.," matches "LP".
 _FIRM_ACRONYMS = {"LLC", "LLP", "LLLP", "LP", "PLLC", "PLC", "PC", "PA"}
 
+# Initialisms kept uppercase in firm names ("LPL Financial", not "Lpl
+# Financial"). Matched against a WHOLE token (or one hyphen/slash-separated
+# part of a token) with surrounding punctuation removed, never as a substring,
+# so "Rice" or "Tdx" are never touched. Only tokens that are not ordinary
+# English words or common surnames belong here; "Inc."/"Ltd"/"Corp." keep
+# their title case on purpose. ICE is a judgment call: it is the exchange
+# operator in "ICE Data Pricing", but could be a word in another name.
+_FIRM_INITIALISMS = frozenset({
+    "AAM", "AE", "AIP", "ALM", "AQR", "ASB", "AST", "AXA", "BB&T", "BBR",
+    "BBVA", "BD", "BDC", "BDT", "BFC", "BFG", "BMO", "BNP", "BNY", "BOK",
+    "BTG", "CBIZ", "CFI", "CFP", "CG", "CIBC", "CIFC", "CREF", "CVC", "CW",
+    "CWA", "CWM", "CX", "DBX", "DLJ", "DWS", "ECP", "EFS", "EP", "ESI", "ETF",
+    "FBL", "FIAM", "GC", "GCM", "GP", "GTCR", "GW&K", "GWN", "HB", "HBK",
+    "HBKS", "HBW", "HK", "HPS", "HSBC", "ICE", "IEQ", "IFG", "IFM", "IFP",
+    "IHT", "IP", "IPI", "JMG", "KFG", "KKR", "KSL", "LNW", "LPL", "LSV",
+    "MDT", "MDTA", "MFS", "MMA", "MML", "MWA", "NB", "NBC", "NEPC", "NFSG",
+    "NISA", "NLG", "NPA", "NWAM", "NWF", "PFG", "PFS", "PGIM", "PKS", "PMC",
+    "PNC", "PPM", "PTMA", "RBC", "RFG", "RMR", "RWA", "SCS", "SEI", "SEIA",
+    "SLC", "SPC", "SSGA", "SVB", "TCW", "TD", "TIAA", "TLG", "TPG", "UBS",
+    "UK", "US", "USA", "USAA", "WCG", "WCM",
+})
+
+# A token made only of single letters each followed by a dot ("J.P.",
+# "U.S.", "N.A.", "B.o.s.s."), the final dot optional ("A.g.p").
+_DOTTED_INITIALS_RE = re.compile(r"(?:[A-Za-z]\.)+[A-Za-z]?")
+# One or two letters on each side of "&" ("H&H", "L&G", "S&P").
+_AMPERSAND_INITIALS_RE = re.compile(r"[A-Za-z]{1,2}&[A-Za-z]{1,2}")
+# Leading / trailing punctuation around a token's core. The trailing class
+# has no "." so the dotted-initials rule still sees "J.P.".
+_TOKEN_SPLIT_RE = re.compile(r"^([(\[\"']*)(.*?)([)\]\"',;:]*)$")
+
+
+def _upper_initialism_part(part: str) -> str:
+    core = part.rstrip(".")
+    if core.upper() in _FIRM_INITIALISMS or _AMPERSAND_INITIALS_RE.fullmatch(core):
+        return core.upper() + part[len(core):]
+    return part
+
+
+def _firm_token_case(tok: str) -> str:
+    if tok.strip(",.").replace(".", "").upper() in _FIRM_ACRONYMS:
+        return tok.upper()
+    lead, core, trail = _TOKEN_SPLIT_RE.match(tok).groups()
+    if not core:
+        return tok
+    if lead and core[0].islower():
+        # capitalize() in title_case_name() saw the quote/parenthesis as the
+        # first character: '"tate' -> '"Tate', '(ny)' -> '(Ny)'.
+        core = core[0].upper() + core[1:]
+    if _DOTTED_INITIALS_RE.fullmatch(core.rstrip(".")):
+        return lead + core.upper() + trail
+    core = "-".join(
+        "/".join(_upper_initialism_part(p) for p in piece.split("/"))
+        for piece in core.split("-")
+    )
+    return lead + core + trail
+
 
 def title_case_firm_name(s: str | None) -> str | None:
+    """title_case_name() plus three firm-name rules: legal-entity designators
+    stay uppercase (LLC, L.P.), dotted initials stay uppercase (J.P., U.S.,
+    N.A.), and listed initialisms stay uppercase (LPL, UBS, KKR). Idempotent."""
     cased = title_case_name(s)
     if not cased:
         return cased
-    return " ".join(
-        tok.upper() if tok.strip(",.").replace(".", "").upper() in _FIRM_ACRONYMS else tok
-        for tok in cased.split(" ")
-    )
+    return " ".join(_firm_token_case(tok) for tok in cased.split(" "))
+
+
+# ── unreadable characters (U+FFFD) in firm data ─────────────────────────────
+# Upstream decoded some cp1252 SEC files as UTF-8 with errors='replace', so a
+# few firm names/addresses carry U+FFFD where a letter was lost
+# ("S\ufffdO PAULO"). The original letter is not recoverable here: the text is
+# returned as is (never guessed, never passed through ftfy) and labeled.
+REPLACEMENT_CHAR = "\ufffd"
+
+UNREADABLE_CHARS_CAVEAT = (
+    "Some characters in this firm's record could not be read from the source "
+    "data (shown as \ufffd). See the firm's SEC IAPD record (link in verify) "
+    "for the exact spelling."
+)
+
+UNREADABLE_CHARS_NOTE = (
+    "Some characters could not be read from the source data (shown as \ufffd). "
+    "See the SEC IAPD record for the exact spelling."
+)
+
+
+def has_unreadable_chars(*values) -> bool:
+    """True when any string in `values` contains U+FFFD."""
+    return any(isinstance(v, str) and REPLACEMENT_CHAR in v for v in values)
+
+
+# ── outbound URLs ────────────────────────────────────────────────────────────
+
+# "name:" at the start of the value. A digit after the colon is a port
+# ("localhost:8080"), not a scheme.
+_URL_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):(?!\d)")
+
+
+def normalize_url(value) -> str | None:
+    """A link safe to hand to a client, or None.
+
+    Strips surrounding whitespace; empty -> None. A value that already has an
+    http:// or https:// scheme (any letter case) is returned unchanged. Any
+    other scheme ("javascript:", "mailto:", "ftp:") -> None. A value with no
+    scheme gets "https://" in front ("linkedin.com/in/x" ->
+    "https://linkedin.com/in/x"; "//host/x" -> "https://host/x"). Nothing
+    else is changed: no lowercasing, no percent-encoding ("®" stays)."""
+    if not isinstance(value, str):
+        return None
+    url = value.strip()
+    if not url:
+        return None
+    match = _URL_SCHEME_RE.match(url)
+    if match:
+        return url if match.group(1).lower() in ("http", "https") else None
+    if url.startswith("//"):
+        return "https:" + url
+    return "https://" + url
 
 
 # ── verification link builders ────────────────────────────────────────────────
@@ -238,7 +348,7 @@ def marketplace_block(row: Any) -> dict:
     Never render this data without the note -- that's what keeps a business
     listing from reading as an endorsement."""
     return {
-        "profile_url": _row_value(row, "profile_url"),
+        "profile_url": normalize_url(_row_value(row, "profile_url")),
         "job_title": clean_text(_row_value(row, "jobTitle")),
         "pricing": marketplace_pricing(_row_value(row, "pricing")),
         "note": _MARKETPLACE_NOTE,
@@ -658,6 +768,46 @@ def name_rank_tokens(raw: str | None) -> list[str]:
     cleaned = _DISALLOWED_RE.sub(" ", _fold_diacritics(raw)).replace("_", " ").lower()
     tokens = [t.strip(".'-") for t in cleaned.split()]
     return [t for t in tokens if t and t not in _NAME_SUFFIX_TOKENS]
+
+
+# ── firm-name ranking key (search_firms exact-name-first ordering) ──────────
+
+# Trailing legal-entity suffixes ignored when comparing a firm name with the
+# search text, so "Wealth Enhancement Group" equals "WEALTH ENHANCEMENT GROUP,
+# LLC". Written as they appear in filings; firm_rank_key() normalizes them the
+# same way it normalizes names (dots removed: "L.L.C." -> "llc").
+FIRM_LEGAL_SUFFIXES = (
+    "LLC", "L.L.C.", "INC", "INCORPORATED", "LP", "L.P.", "LLP", "LTD",
+    "CO", "CORP", "CORPORATION", "PLLC", "PC", "N.A.",
+)
+_RANK_DROP = str.maketrans("", "", ".'\u2019")  # removed: "J.P." -> "jp"
+_RANK_SPACE_RE = re.compile(r"[^\w\s]|_", re.UNICODE)  # other punctuation -> space
+
+
+def _rank_tokens(raw: str) -> list[str]:
+    # ASCII names (nearly all) skip the NFKD fold: it is a no-op for them,
+    # and this runs once per matched name on broad searches.
+    folded = raw if raw.isascii() else _fold_diacritics(raw)
+    return _RANK_SPACE_RE.sub(" ", folded.lower().translate(_RANK_DROP)).split()
+
+
+_FIRM_SUFFIX_TOKENS = frozenset(t for sfx in FIRM_LEGAL_SUFFIXES for t in _rank_tokens(sfx))
+
+
+def firm_rank_key(raw: str | None) -> str:
+    """Normalized firm name for exact / starts-with comparison in
+    search_firms: diacritics folded, lowercase, dots and apostrophes removed,
+    other punctuation (including U+FFFD) turned into spaces, whitespace
+    collapsed, and trailing FIRM_LEGAL_SUFFIXES removed repeatedly ("Goldman
+    Sachs & Co. LLC" -> "goldman sachs"). A name made only of suffixes keeps
+    them. Pure; "" for empty input."""
+    if not raw:
+        return ""
+    tokens = _rank_tokens(raw)
+    end = len(tokens)
+    while end > 1 and tokens[end - 1] in _FIRM_SUFFIX_TOKENS:
+        end -= 1
+    return " ".join(tokens[:end])
 
 
 # ── flexible date parsing (SEC data mixes ISO and M/D/YYYY) ──────────────────

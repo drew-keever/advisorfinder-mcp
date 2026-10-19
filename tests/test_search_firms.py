@@ -1,4 +1,4 @@
-from advisorfinder_mcp import server
+from advisorfinder_mcp import format, server
 
 
 def _envelope_keys_present(result):
@@ -182,3 +182,131 @@ def test_crd_in_both_firms_and_firms_state_is_returned_once(tmp_path, monkeypatc
         assert len(rows) == 1, kwargs
         assert rows[0]["advisor_count"] is not None  # the `firms` row wins
         assert "caveat" not in rows[0]
+
+
+# ── exact-name-first ranking ────────────────────────────────────────────────
+# Production: "Wealth Enhancement Group" ranked CRD 133088 (other name "Total
+# Wealth Enhancement Group LLC") above CRD 116407, whose other name is exactly
+# "WEALTH ENHANCEMENT GROUP, LLC". These tests build a copy of the fixture with
+# that shape (the committed .db files are never edited).
+
+def _copy_with(tmp_path, monkeypatch, firms=(), state_firms=(), other_names=(), locations=()):
+    import shutil
+    import sqlite3
+
+    from advisorfinder_mcp import db
+    copy = tmp_path / "ranked.db"
+    shutil.copy(db.DB_PATH, copy)
+    conn = sqlite3.connect(copy)
+    for crd, name, city, state in firms:
+        conn.execute(
+            "INSERT INTO firms (crd_number, primary_name, address_city, address_state, aum_band) "
+            "VALUES (?, ?, ?, ?, 'Not disclosed')", (crd, name, city, state),
+        )
+        conn.execute("INSERT INTO firm_fts (name, crd_number, kind) VALUES (?, ?, 'primary')", (name, crd))
+    for crd, name, city, state in state_firms:
+        conn.execute(
+            "INSERT INTO firms_state (crd_number, primary_name, address_city, address_state, aum_band) "
+            "VALUES (?, ?, ?, ?, 'Under $100M')", (crd, name, city, state),
+        )
+        conn.execute("INSERT INTO firm_fts (name, crd_number, kind) VALUES (?, ?, 'state')", (name, crd))
+    for crd, name in other_names:
+        conn.execute("INSERT INTO firm_other_names (crd_number, other_name) VALUES (?, ?)", (crd, name))
+        conn.execute("INSERT INTO firm_fts (name, crd_number, kind) VALUES (?, ?, 'other')", (name, crd))
+    for crd, street1, city in locations:
+        conn.execute(
+            "INSERT INTO firm_locations (crd_number, location_type, street1, city, state, private_res) "
+            "VALUES (?, 'branch', ?, ?, 'XX', 'N')", (crd, street1, city),
+        )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", copy)
+    return copy
+
+
+_WEG_FIRMS = [
+    ("900001", "GARDEN STATE INVESTMENT ADVISORY SERVICES, LLC", "NEWARK", "NJ"),
+    ("900002", "WEALTH ENHANCEMENT ADVISORY SERVICES, LLC", "PLYMOUTH", "MN"),
+    ("900003", "WEALTH ENHANCEMENT GROUP PARTNERS", "AUSTIN", "TX"),
+    ("900005", "Wealth Enhancement Group Inc", "DENVER", "CO"),
+]
+_WEG_STATE = [("900004", "AAA WEALTH ENHANCEMENT GROUP ADVISERS", "BOISE", "ID")]
+_WEG_OTHER = [
+    ("900001", "TOTAL WEALTH ENHANCEMENT GROUP LLC"),
+    ("900002", "WEALTH ENHANCEMENT GROUP HOLDINGS"),  # prefix match
+    ("900002", "WEALTH ENHANCEMENT GROUP, LLC"),      # exact match
+]
+
+
+def test_exact_names_rank_before_partial_matches(tmp_path, monkeypatch):
+    _copy_with(tmp_path, monkeypatch, _WEG_FIRMS, _WEG_STATE, _WEG_OTHER)
+    result = server.search_firms(name="Wealth Enhancement Group")
+    assert [r["crd"] for r in result["results"]] == [
+        "900005",  # exact primary name (suffix "Inc" ignored)
+        "900002",  # exact other name ("WEALTH ENHANCEMENT GROUP, LLC")
+        "900003",  # primary name starts with the search text
+        "900004",  # rest, alphabetical (state-only row ranked the same way)
+        "900001",
+    ]
+    by_crd = {r["crd"]: r for r in result["results"]}
+    # matched_as shows the best-matching other name, not the last one seen.
+    assert by_crd["900002"]["matched_as"] == "also known as Wealth Enhancement Group, LLC"
+
+
+def test_exact_match_survives_limit(tmp_path, monkeypatch):
+    _copy_with(tmp_path, monkeypatch, _WEG_FIRMS, _WEG_STATE, _WEG_OTHER)
+    result = server.search_firms(name="WEALTH ENHANCEMENT GROUP", limit=2)
+    assert [r["crd"] for r in result["results"]] == ["900005", "900002"]
+
+
+def test_exact_state_only_name_ranks_first(tmp_path, monkeypatch):
+    _copy_with(tmp_path, monkeypatch, firms=[("900020", "AAA DELTA STATE ADVISERS LLC", "X", "NY")])
+    result = server.search_firms(name="Delta State Advisers")
+    assert [r["crd"] for r in result["results"]] == ["500001", "900020"]
+    assert "caveat" in result["results"][0]
+
+
+def test_browse_order_is_case_insensitive_then_crd(tmp_path, monkeypatch):
+    _copy_with(tmp_path, monkeypatch, firms=[
+        ("900031", "zeta advisors", "X", "WY"),
+        ("900030", "ZETA ADVISORS", "X", "WY"),
+        ("900032", "Yankee Advisors", "X", "WY"),
+    ])
+    result = server.search_firms(state="WY")
+    assert [r["crd"] for r in result["results"]] == ["900032", "900030", "900031"]
+
+
+# ── per-result notes: empty roster, lost characters ─────────────────────────
+
+def test_zero_roster_sec_firm_gets_advisor_count_note():
+    result = server.search_firms(limit=50)
+    by_crd = {r["crd"]: r for r in result["results"]}
+    assert by_crd["100003"]["advisor_count"] == 0
+    note = by_crd["100003"]["advisor_count_note"]
+    assert "does not necessarily mean" in note and "IAPD" in note
+    assert by_crd["100001"]["advisor_count"] > 0
+    assert "advisor_count_note" not in by_crd["100001"]
+    # State-only firms keep their state caveat and a null count, no note.
+    assert by_crd["500001"]["advisor_count"] is None
+    assert "advisor_count_note" not in by_crd["500001"]
+    assert "caveat" in by_crd["500001"]
+
+
+def test_unreadable_characters_note_only_when_shown_text_has_fffd(tmp_path, monkeypatch):
+    _copy_with(
+        tmp_path, monkeypatch,
+        firms=[("900040", "M�TIER CAPITAL, LLC", "NEW YORK", "NY"),
+               ("900041", "PLAIN CAPITAL, LLC", "S�O PAULO", "NY"),
+               ("900042", "OTHER NAME HOLDINGS", "NEW YORK", "NY")],
+        other_names=[("900042", "HARVEST�WEALTH CAPITAL")],
+    )
+    result = server.search_firms(name="capital", limit=50)
+    by_crd = {r["crd"]: r for r in result["results"]}
+    assert by_crd["900040"]["name"] == "M�tier Capital, LLC"  # left as is
+    assert by_crd["900041"]["city"] == "S�o Paulo"
+    for crd in ("900040", "900041"):
+        assert by_crd[crd]["unreadable_characters_note"] == format.UNREADABLE_CHARS_NOTE
+    # matched_as is displayed text too.
+    assert "�" in by_crd["900042"]["matched_as"]
+    assert "unreadable_characters_note" in by_crd["900042"]
+    assert "unreadable_characters_note" not in by_crd["100003"]

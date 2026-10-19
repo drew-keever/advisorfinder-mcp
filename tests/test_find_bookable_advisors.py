@@ -363,3 +363,33 @@ def test_specialty_limit_applies_after_filter():
     # "Mary Jones", sorts between them and has no credentials).
     rows = db.search_marketplace(specialty="cfp", limit=1)
     assert [r["crd"] for r in rows] == ["1000002"]
+
+
+# ── marketplace links: scheme added, unsafe schemes dropped ─────────────────
+# Production profiles hold links with no scheme (60/163 websites, 25/141
+# LinkedIn, 2/19 Twitter: "linkedin.com/in/jakehughesnm", "mgrwealth.com").
+
+def test_find_bookable_links_get_https_scheme(monkeypatch):
+    row = dict(_PROD_SHAPED_ROW)
+    row.update({
+        "advisorWebsiteURL": "  mgrwealth.com ",
+        "linkedInURL": "linkedin.com/in/Jake-Hughes-CFP®",
+        "twitterURL": "www.twitter.com/7saturdaysaweek",
+        "bioVideoLink": "javascript:alert(1)",
+        "profile_url": "advisorfinder.com/app/advisor-profile/x/y",
+    })
+    monkeypatch.setattr(db, "search_marketplace", lambda **kw: [row])
+    entry = server.find_bookable_advisors()["results"][0]
+    assert entry["website"] == "https://mgrwealth.com"
+    assert entry["linkedin"] == "https://linkedin.com/in/Jake-Hughes-CFP®"  # case and ® kept
+    assert entry["twitter"] == "https://www.twitter.com/7saturdaysaweek"
+    assert entry["bio_video"] is None  # non-http scheme dropped
+    assert entry["profile_url"] == "https://advisorfinder.com/app/advisor-profile/x/y"
+
+
+def test_find_bookable_links_with_scheme_unchanged():
+    result = server.find_bookable_advisors()
+    by_crd = {r["crd"]: r for r in result["results"]}
+    assert by_crd["1000002"]["website"] == "https://johnsmithadvisors.example.com"
+    assert by_crd["1000002"]["linkedin"] == "https://linkedin.com/in/johnqsmith"
+    assert by_crd["1000003"]["website"] is None  # empty stays None

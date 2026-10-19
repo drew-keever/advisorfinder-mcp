@@ -830,3 +830,128 @@ def test_non_finite_numbers_are_dropped_and_sort_last():
     pricing = fmt.marketplace_pricing('[{"M": {"typeName": {"S": "HOURLY"}, "rate": NaN}}]')
     assert pricing == [{"type": "hourly"}]
     assert "nan" not in json.dumps(fmt.marketplace_credentials(raw)).lower()
+
+
+# ── title_case_firm_name: dotted initials and initialisms ───────────────────
+
+@pytest.mark.parametrize("raw, expected", [
+    ("J.P. MORGAN SECURITIES LLC", "J.P. Morgan Securities LLC"),
+    ("RBC GLOBAL ASSET MANAGEMENT (U.S.) INC.", "RBC Global Asset Management (U.S.) Inc."),
+    ("JPMORGAN CHASE BANK, N.A.", "Jpmorgan Chase Bank, N.A."),
+    ("B.O.S.S. RETIREMENT ADVISORS, LLC", "B.O.S.S. Retirement Advisors, LLC"),
+    ("A.G.P / ALLIANCE GLOBAL PARTNERS", "A.G.P / Alliance Global Partners"),
+    ("LPL FINANCIAL LLC", "LPL Financial LLC"),
+    ("ICE DATA PRICING & REFERENCE DATA, LLC", "ICE Data Pricing & Reference Data, LLC"),
+    ("UBS FINANCIAL SERVICES INC.", "UBS Financial Services Inc."),
+    ("BNY MELLON ADVISORS, INC.", "BNY Mellon Advisors, Inc."),
+    ("MANULIFE INVESTMENT MANAGEMENT (US) LLC", "Manulife Investment Management (US) LLC"),
+    ("AXA INVESTMENT MANAGERS US INC", "AXA Investment Managers US Inc"),
+    ("BB&T SECURITIES, LLC", "BB&T Securities, LLC"),
+    ("H&H INTERNATIONAL INVESTMENT, LLC", "H&H International Investment, LLC"),
+    ("MORGAN STANLEY AIP GP LP", "Morgan Stanley AIP GP LP"),
+    ("KOSHINSKI ASSET MANAGEMENT, INC.-DBA IPI ASSET MANAGEMENT, INC.",
+     "Koshinski Asset Management, Inc.-Dba IPI Asset Management, Inc."),
+    ('"TATE ASSET MANAGEMENT" AND "DCO WEALTH MANAGEMENT"',
+     '"Tate Asset Management" And "Dco Wealth Management"'),
+    # Unchanged behavior: legal suffixes, Inc./Ltd/Corp., St., Mc, roman numerals.
+    ("EDWARD D. JONES & CO., L.P.", "Edward D. Jones & Co., L.P."),
+    ("OXFORD FINANCIAL GROUP, LTD", "Oxford Financial Group, Ltd"),
+    ("ST. CLAIR FINANCIAL", "St. Clair Financial"),
+    ("COOPER MCMANUS", "Cooper McManus"),
+    ("III CAPITAL MANAGEMENT", "III Capital Management"),
+])
+def test_title_case_firm_name_initials(raw, expected):
+    assert fmt.title_case_firm_name(raw) == expected
+    assert fmt.title_case_firm_name(expected) == expected  # idempotent
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("RICE FINANCIAL", "Rice Financial"),       # ICE only as a whole token
+    ("ICED CAPITAL", "Iced Capital"),
+    ("TDX FUND", "Tdx Fund"),                  # TD only as a whole token
+    ("MUSTARD SEED ADVISORS", "Mustard Seed Advisors"),
+    ("TRUST US WEALTH", "Trust US Wealth"),    # documented: US is an initialism here
+])
+def test_title_case_firm_name_initialisms_are_whole_token_only(raw, expected):
+    assert fmt.title_case_firm_name(raw) == expected
+
+
+def test_title_case_firm_name_keeps_replacement_char():
+    assert fmt.title_case_firm_name("M�TIER CAPITAL, LLC") == "M�tier Capital, LLC"
+
+
+def test_firm_initialisms_are_uppercase_and_short():
+    for token in fmt._FIRM_INITIALISMS:
+        assert token == token.upper() and 2 <= len(token) <= 5, token
+
+
+def test_firm_initialism_rules_do_not_leak_into_person_names():
+    # The initialism allowlist lives in title_case_firm_name only; person and
+    # city names keep title_case_name's behavior. (Dotted initials in person
+    # names are a separate follow-up, not covered here.)
+    assert fmt.title_case_name("LPL JONES") == "Lpl Jones"
+    assert fmt.title_case_name("TD JONES") == "Td Jones"
+
+
+# ── firm_rank_key ────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("suffix", fmt.FIRM_LEGAL_SUFFIXES)
+def test_firm_rank_key_drops_each_trailing_suffix(suffix):
+    assert fmt.firm_rank_key(f"Wealth Enhancement Group, {suffix}") == "wealth enhancement group"
+    assert fmt.firm_rank_key(f"wealth enhancement group {suffix.lower()}") == "wealth enhancement group"
+
+
+def test_firm_rank_key_suffix_list_is_explicit():
+    assert set(fmt.FIRM_LEGAL_SUFFIXES) == {
+        "LLC", "L.L.C.", "INC", "INCORPORATED", "LP", "L.P.", "LLP", "LTD",
+        "CO", "CORP", "CORPORATION", "PLLC", "PC", "N.A.",
+    }
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("WEALTH ENHANCEMENT GROUP, LLC", "wealth enhancement group"),
+    ("Wealth  Enhancement   Group", "wealth enhancement group"),
+    ("GOLDMAN SACHS & CO. LLC", "goldman sachs"),          # suffixes removed repeatedly
+    ("Edward D. Jones & Co., L.P.", "edward d jones"),
+    ("J.P. Morgan", "jp morgan"),
+    ("JPMorgan Chase Bank, N.A.", "jpmorgan chase bank"),
+    ("Société Générale", "societe generale"),               # diacritics folded
+    ("L.L.C.", "llc"),                                       # never stripped to empty
+    ("Co Investors LLC", "co investors"),                    # only TRAILING suffixes
+    ("M�TIER CAPITAL, LLC", "m tier capital"),
+    ("", ""),
+    (None, ""),
+])
+def test_firm_rank_key(raw, expected):
+    assert fmt.firm_rank_key(raw) == expected
+
+
+# ── normalize_url ────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw, expected", [
+    ("mgrwealth.com", "https://mgrwealth.com"),
+    ("linkedin.com/in/jakehughesnm", "https://linkedin.com/in/jakehughesnm"),
+    ("www.twitter.com/7saturdaysaweek", "https://www.twitter.com/7saturdaysaweek"),
+    ("  https://Example.com/A  ", "https://Example.com/A"),
+    ("http://example.com", "http://example.com"),
+    ("HTTPS://EXAMPLE.COM/Path", "HTTPS://EXAMPLE.COM/Path"),
+    ("linkedin.com/in/joe-cfp®", "https://linkedin.com/in/joe-cfp®"),
+    ("//cdn.example.com/x", "https://cdn.example.com/x"),
+    ("www.example.com:8080/a", "https://www.example.com:8080/a"),
+    ("javascript:alert(1)", None),
+    ("JavaScript:alert(1)", None),
+    ("mailto:a@example.com", None),
+    ("ftp://example.com", None),
+    ("", None),
+    ("   ", None),
+    (None, None),
+    (42, None),
+])
+def test_normalize_url(raw, expected):
+    assert fmt.normalize_url(raw) == expected
+
+
+def test_has_unreadable_chars():
+    assert fmt.has_unreadable_chars(None, "S�O PAULO")
+    assert not fmt.has_unreadable_chars(None, "São Paulo", 3)
+    assert "�" in fmt.UNREADABLE_CHARS_CAVEAT

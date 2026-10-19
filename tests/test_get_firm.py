@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from advisorfinder_mcp import server
 
 
@@ -28,7 +30,7 @@ def test_found_basic_identity_and_address():
     assert result["name"] == "Alpha Wealth LLC"
     assert result["address"]["city"] == "New York"
     assert result["address"]["state"] == "NY"
-    assert result["website"] == "alphawealth.com"
+    assert result["website"] == "https://alphawealth.com"  # scheme added (normalize_url)
     assert result["aum_band"] == "Not disclosed"
 
 
@@ -170,3 +172,66 @@ def test_broker_only_person_is_not_counted():
     assert broker_only >= 1  # guard: the fixture has a broker-only person
     result = server.get_firm(crd="100001")
     assert result["advisor_count"] == everyone - broker_only
+
+
+# ── lost characters (U+FFFD) are shown as is and labeled ────────────────────
+
+def _fffd_copy(tmp_path, monkeypatch, sql_statements):
+    import shutil
+    import sqlite3
+
+    from advisorfinder_mcp import db
+    copy = tmp_path / "fffd.db"
+    shutil.copy(db.DB_PATH, copy)
+    conn = sqlite3.connect(copy)
+    for sql, params in sql_statements:
+        conn.execute(sql, params)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", copy)
+
+
+def test_get_firm_no_unreadable_caveat_for_clean_record():
+    from advisorfinder_mcp import format
+    result = server.get_firm(crd="100001")
+    assert format.UNREADABLE_CHARS_CAVEAT not in result["coverage_caveats"]
+
+
+def test_get_firm_location_with_fffd_gets_one_caveat(tmp_path, monkeypatch):
+    from advisorfinder_mcp import format
+    _fffd_copy(tmp_path, monkeypatch, [
+        ("INSERT INTO firm_locations (crd_number, location_type, street1, city, state, private_res) "
+         "VALUES ('100001', 'branch', ?, ?, NULL, 'N')",
+         ("R. LEOPOLDO COUTO DE MAGALH�ES J�NIOR", "S�O PAULO")),
+        ("INSERT INTO firm_other_names (crd_number, other_name) VALUES ('100001', ?)",
+         ("LEALT� PRIVATE WEALTH",)),
+    ])
+    result = server.get_firm(crd="100001")
+    streets = [loc.get("street1") for loc in result["locations"]]
+    assert "R. LEOPOLDO COUTO DE MAGALH�ES J�NIOR" in streets  # never guessed
+    assert result["coverage_caveats"].count(format.UNREADABLE_CHARS_CAVEAT) == 1
+
+
+@pytest.mark.parametrize("column, value", [
+    ("primary_name", "M�TIER CAPITAL, LLC"),
+    ("legal_name", "LINDA S. LUBITZ, CFP�, PA"),
+    ("address_street1", "31 W 52ND�STREET"),
+    ("address_city", "S�O PAULO"),
+])
+def test_get_firm_identity_field_with_fffd_gets_caveat(tmp_path, monkeypatch, column, value):
+    from advisorfinder_mcp import format
+    _fffd_copy(tmp_path, monkeypatch, [
+        (f"UPDATE firms SET {column} = ? WHERE crd_number = '100001'", (value,)),
+    ])
+    result = server.get_firm(crd="100001")
+    assert format.UNREADABLE_CHARS_CAVEAT in result["coverage_caveats"]
+
+
+def test_get_firm_state_only_with_fffd_gets_caveat(tmp_path, monkeypatch):
+    from advisorfinder_mcp import format
+    _fffd_copy(tmp_path, monkeypatch, [
+        ("UPDATE firms_state SET primary_name = ? WHERE crd_number = '500001'", ("DELTA ST�TE",)),
+    ])
+    result = server.get_firm(crd="500001")
+    assert result["reduced_profile"] is True
+    assert format.UNREADABLE_CHARS_CAVEAT in result["coverage_caveats"]
