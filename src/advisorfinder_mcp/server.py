@@ -622,9 +622,10 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     state-listed firms showing rosters are dual-registered. Exact name matches
     rank first (the firm's own name, then an "also known as" name), then names
     that start with the search text (own names before "also known as" names),
-    then other matches. Inside each group, firms with more advisors on file
-    come first. A result can carry `advisor_count_note`
-    (no advisor records on file) or `unreadable_characters_note` (characters
+    then other matches. Inside each group, firms with a larger SEC AUM band
+    come first, then firms with more advisors on file (a state-registered-
+    only firm ranks as an undisclosed band with no advisors). A result can
+    carry `advisor_count_note` (no advisor records on file) or `unreadable_characters_note` (characters
     lost in the source data, shown as \ufffd).
     """
     unsanitizable = _unsanitizable_supplied_filter(name=name)

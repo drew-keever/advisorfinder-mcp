@@ -319,10 +319,12 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
     _firm_name_tier): exact own (primary/legal/state) name, exact other
     ("also known as") name, own name that starts with the search text, other
     name that starts with it, any other own-name match, other-name-only
-    match. Inside a tier the firm with the larger adviser roster comes first
+    match. Inside a tier the firm with the larger SEC AUM band comes first
+    (_AUM_BAND_RANK: "$25B+" highest; "Not disclosed", a missing or unknown
+    band, and every state-only firm lowest), then the larger adviser roster
     (all_roster_counts(): public SEC roster data only; state-only firms count
-    0; marketplace membership is never a factor), then the name
-    (case-insensitive), then crd_number. Browse mode (no name) is ordered by
+    0), then the name (case-insensitive), then crd_number. Marketplace
+    membership is never a factor. Browse mode (no name) is ordered by
     name, then crd_number. `other_name` is the matched other name with the
     best tier, so matched_as shows the name that matched best.
     """
@@ -435,12 +437,17 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
         if hits is not None:
             # Tier first (exact names before the rest -- see the docstring),
             # so a broad name's exact match is never cut off by the limit;
-            # then the larger roster; then a case-insensitive, deterministic
-            # order.
+            # then the larger SEC AUM band; then the larger roster; then a
+            # case-insensitive, deterministic order. State-only firms rank
+            # with the lowest band and a roster of 0.
             def sort_key(r):
-                roster = 0 if r["state_only"] else counts.get(r["crd_number"], 0)
+                if r["state_only"]:
+                    band = roster = 0
+                else:
+                    band = _AUM_BAND_RANK.get(r["aum_band"], 0)
+                    roster = counts.get(r["crd_number"], 0)
                 name_ = r["name"] or ""
-                return (r["tier"], -roster, name_.casefold(), name_, r["crd_number"])
+                return (r["tier"], -band, -roster, name_.casefold(), name_, r["crd_number"])
         else:
             def sort_key(r):
                 name_ = r["name"] or ""
@@ -462,6 +469,19 @@ _TIER_PREFIX_OWN = 2    # an own name starts with it
 _TIER_PREFIX_OTHER = 3  # an other name starts with it
 _TIER_REST_OWN = 4      # an own name matched (full-text) some other way
 _TIER_REST_OTHER = 5    # only other names matched
+
+# search_firms tie-break inside a tier: the firm's SEC AUM band (public Form
+# ADV data), larger first. The keys are the exact export strings (en dash).
+# "Not disclosed", NULL, any unknown string, and state-only firms rank 0.
+_AUM_BAND_RANK = {
+    "$25B+": 6,
+    "$5B\u2013$25B": 5,
+    "$1B\u2013$5B": 4,
+    "$500M\u2013$1B": 3,
+    "$100M\u2013$500M": 2,
+    "Under $100M": 1,
+    "Not disclosed": 0,
+}
 
 # Browse mode (no name filter): no tier; the order is by name.
 _BROWSE_PRIMARY = {"kinds": frozenset({"primary"}), "other_name": None, "tier": 0}

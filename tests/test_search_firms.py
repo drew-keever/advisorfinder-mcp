@@ -378,6 +378,99 @@ def test_larger_roster_ranks_first_inside_a_tier(tmp_path, monkeypatch):
     assert [r["advisor_count"] for r in rows] == [30, 7, 7, 0, None]
 
 
+# ── SEC AUM band before roster inside a tier ────────────────────────────────
+# Production: "Capital Group" matched two exact other names. Integrity
+# Alliance (CRD 139627, "$5B–$25B", 359 advisers) ranked above Capital
+# Research and Management Company (CRD 110885, "$25B+", roster 0), the real
+# Capital Group.
+
+def _set_bands(path, bands, table="firms"):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.executemany(
+        f"UPDATE {table} SET aum_band = ? WHERE crd_number = ?",
+        [(band, crd) for crd, band in bands],
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_larger_aum_band_ranks_before_larger_roster_inside_a_tier(tmp_path, monkeypatch):
+    copy = _copy_with(
+        tmp_path, monkeypatch,
+        firms=[
+            ("900081", "INTEGRITY ALLIANCE, LLC", "X", "NY"),
+            ("900082", "CAPITAL RESEARCH AND MANAGEMENT COMPANY", "X", "CA"),
+        ],
+        other_names=[("900081", "CAPITAL GROUP"), ("900082", "CAPITAL GROUP")],
+        rosters=[("900081", 359)],
+    )
+    _set_bands(copy, [("900081", "$5B\u2013$25B"), ("900082", "$25B+")])
+    result = server.search_firms(name="Capital Group")
+    assert [r["crd"] for r in result["results"]] == ["900082", "900081"]
+
+
+def test_aum_band_order_then_roster_inside_a_tier(tmp_path, monkeypatch):
+    copy = _copy_with(
+        tmp_path, monkeypatch,
+        firms=[
+            ("900091", "BANDTEST ALPHA", "X", "NY"),    # Not disclosed (default)
+            ("900092", "BANDTEST BRAVO", "X", "NY"),    # Under $100M
+            ("900093", "BANDTEST CHARLIE", "X", "NY"),  # $100M–$500M
+            ("900094", "BANDTEST DELTA", "X", "NY"),    # $500M–$1B
+            ("900095", "BANDTEST ECHO", "X", "NY"),     # $1B–$5B, roster 2
+            ("900096", "BANDTEST FOXTROT", "X", "NY"),  # $1B–$5B, roster 9
+            ("900097", "BANDTEST GOLF", "X", "NY"),     # $5B–$25B
+            ("900098", "BANDTEST HOTEL", "X", "NY"),    # $25B+
+            ("900099", "BANDTEST INDIA", "X", "NY"),    # unknown band string
+            ("900100", "BANDTEST JULIET", "X", "NY"),   # NULL band, roster 1
+        ],
+        state_firms=[("900101", "BANDTEST KILO", "X", "NY")],  # state-only
+        rosters=[("900095", 2), ("900096", 9), ("900100", 1)],
+    )
+    _set_bands(copy, [
+        ("900092", "Under $100M"),
+        ("900093", "$100M\u2013$500M"),
+        ("900094", "$500M\u2013$1B"),
+        ("900095", "$1B\u2013$5B"),
+        ("900096", "$1B\u2013$5B"),
+        ("900097", "$5B\u2013$25B"),
+        ("900098", "$25B+"),
+        ("900099", "$1B-$5B"),  # hyphen, not the export's en dash: unknown
+        ("900100", None),
+    ])
+    # A state-only firm's band is not used: it ranks lowest.
+    _set_bands(copy, [("900101", "$1B\u2013$5B")], table="firms_state")
+    result = server.search_firms(name="bandtest")
+    assert [r["crd"] for r in result["results"]] == [
+        "900098",  # $25B+
+        "900097",  # $5B–$25B
+        "900096",  # $1B–$5B, 9 advisers
+        "900095",  # $1B–$5B, 2 advisers
+        "900094",  # $500M–$1B
+        "900093",  # $100M–$500M
+        "900092",  # Under $100M
+        "900100",  # lowest band (NULL), 1 adviser
+        "900091",  # lowest band (Not disclosed), 0, then by name
+        "900099",  # lowest band (unknown string)
+        "900101",  # lowest band (state-only)
+    ]
+
+
+def test_aum_band_does_not_override_name_tier(tmp_path, monkeypatch):
+    copy = _copy_with(
+        tmp_path, monkeypatch,
+        firms=[
+            ("900111", "TIERBAND", "X", "NY"),
+            ("900112", "TIERBAND GLOBAL PARTNERS", "X", "NY"),
+            ("900113", "THE TIERBAND GROUP", "X", "NY"),
+        ],
+    )
+    _set_bands(copy, [("900112", "$25B+"), ("900113", "$25B+")])
+    result = server.search_firms(name="tierband")
+    assert [r["crd"] for r in result["results"]] == ["900111", "900112", "900113"]
+
+
 def test_roster_counts_are_cached_once_per_db(tmp_path, monkeypatch):
     from advisorfinder_mcp import db
     calls = []
