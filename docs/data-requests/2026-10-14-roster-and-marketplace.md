@@ -53,3 +53,29 @@ sanitize step. Data-quality notes seen while doing this:
   "boung to be a fiduciary"); the MCP no longer shows it.
 - `education.completedDate` is a JavaScript `Date.toString()` string; store an
   ISO date or a year.
+
+## 4. Lost characters (U+FFFD) in firm data — added 2026-10-18
+
+The artifact stores the replacement character `�` where the SEC files have
+accented letters. Example, Goldman Sachs CRD 361 branch:
+`R. LEOPOLDO COUTO DE MAGALH�ES J�NIOR`, `S�O PAULO`.
+
+| Table.column | Rows with `�` |
+|---|---|
+| `firm_locations.street1` / `street2` / `city` / `phone` | 58 / 16 / 20 / 4 (65 firms) |
+| `firms.primary_name` / `legal_name` / `address_street1` / `address_street2` / `phone` | 3 / 2 / 2 / 2 / 1 |
+| `firm_other_names.other_name` | 11 |
+
+**Root cause (verified read-only):** `scripts/build_history.py`
+`open_csv_in_zip()` does `data.decode('utf-8', errors='replace')`. The SEC ADV
+bulk CSVs are cp1252/Latin-1, so every accented byte becomes U+FFFD and the
+letter is lost. The raw zip still has the correct bytes: decoding
+`IA_Schedule_D_1F_20111105_20241231.csv` from
+`data/historical/adv-part1-2011-2024.zip` as cp1252 gives
+`RUA LEOPOLDO COUTO DE MAGALHÃES`. The IAPD XML feeds declare
+`encoding="ISO-8859-1"` and are not affected.
+
+**Fix:** decode those CSVs as cp1252 (fall back to latin-1), rebuild
+`firm_locations`, `firms`, `firm_other_names`, then re-export. Check other
+readers of the same zips for the same pattern. The MCP server does not guess
+the letters; it shows the text as stored with a note pointing to SEC IAPD.
