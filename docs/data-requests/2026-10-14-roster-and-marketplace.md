@@ -98,3 +98,41 @@ best matches the firm's name or legal name, and skip hosted personal pages
 (`*.wordpress.com`, `*.blogspot.*`, `*.wixsite.com`, and similar) unless
 they are the only entry. The MCP server shows the value as exported; it does
 not pick between websites itself.
+
+## 6. Firm consolidation drops 3,577 advisors — added 2026-10-22
+
+`firms.canonical_crd` (set by `scripts/cleanup.py` "entity consolidation")
+points 19 firms at another CRD. `build_mcp_public_db.py:356` exports only
+`canonical_crd IS NULL` firms, and their reps are not re-pointed, so every
+advisor whose only adviser firm is a consolidated one disappears from the
+export.
+
+- 4,417 advisors (`ia_only='Y'`) are linked to consolidated firms; **3,577 of
+  them are in no exported firm at all** (checked read-only against the
+  2026-08-28 artifact).
+- Largest: CRD 11025 WELLS FARGO ADVISORS FINANCIAL NETWORK, LLC → 19616
+  (WELLS FARGO CLEARING SERVICES, LLC): 3,995 advisors. These are two separate
+  SEC registrants with the same brand name, not duplicates. Next: 294197
+  ROCKEFELLER & CO. LLC → 291361 (338), 105734 RUSSELL INVESTMENT MANAGEMENT
+  → 329 (74).
+- Found through a real lead: marketplace member Zach Farley (CRD 4609160, Wells
+  Fargo Advisors Financial Network) is active and registered in NM and TX on
+  IAPD, but `check_advisor` says he is not in our data.
+
+**Request:** review the 19 consolidations; do not merge distinct SEC
+registrants that only share a brand name. Where a merge is right, export the
+reps under the canonical CRD instead of dropping them.
+
+## 7. `scripts/refresh_mcp_db.sh` is unsafe to run today — added 2026-10-22
+
+- `main` builds `schema_version` 5; the live server is schema 4 and refuses to
+  boot on a mismatch. The script uploads straight to the production R2 keys,
+  so the next restart would fail.
+- No real-data gate and no rollback copy before the upload.
+- `RENDER_DEPLOY_HOOK` in `~/.config/adfi/mcp_refresh.env` is still a
+  placeholder, so the final `curl` fails after the upload.
+
+**Request:** until the server moves to schema 5, do not run it. When it is
+fixed: upload to a staging key, gate, keep a rollback copy, then promote. The
+MCP side has a marketplace-only refresh runbook in the meantime
+(`advisorfinder-mcp/docs/runbooks/marketplace-refresh.md`).
