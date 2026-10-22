@@ -79,3 +79,22 @@ letter is lost. The raw zip still has the correct bytes: decoding
 `firm_locations`, `firms`, `firm_other_names`, then re-export. Check other
 readers of the same zips for the same pattern. The MCP server does not guess
 the letters; it shows the text as stored with a note pointing to SEC IAPD.
+
+## 5. Firm website can be an employee's personal site — added 2026-10-22
+
+`firms.website_clean` for Fisher Investments (CRD 107342) is
+`https://jaycarlsonfisherinvestments.wordpress.com`, a personal blog, not the
+firm's site. CRD 125800 has `https://michaeldayoub.wordpress.com`. A directory
+tester saw the Fisher value through `get_firm`.
+
+**Cause (read-only check):** `scripts/cleanup.py` `clean_websites()` only
+normalizes `firms.website`; it does not choose between the websites a firm
+lists on Form ADV (Item 1.I / Schedule D Section 1.I lists every site,
+including employee and social pages). The stored value is one of those
+entries, not necessarily the firm's main domain.
+
+**Request:** when a firm lists several websites, choose the one whose domain
+best matches the firm's name or legal name, and skip hosted personal pages
+(`*.wordpress.com`, `*.blogspot.*`, `*.wixsite.com`, and similar) unless
+they are the only entry. The MCP server shows the value as exported; it does
+not pick between websites itself.
