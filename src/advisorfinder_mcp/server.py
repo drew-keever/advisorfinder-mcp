@@ -988,7 +988,13 @@ def main() -> None:
         "[boot +%.1fs] DB ready (%s); server starting on 0.0.0.0:%d",
         time.monotonic() - t0, db_path, port,
     )
-    mcp.run(transport="http", host="0.0.0.0", port=port)
+    # Stateless HTTP: every request is self-contained, so no server-side
+    # MCP session can be lost (a restart, deploy or dropped session made
+    # clients holding an old Mcp-Session-Id get 404 "Session not found",
+    # which the directory reports as McpSessionTerminated). Safe because no
+    # tool uses session state (no Context, progress, sampling or
+    # subscriptions).
+    mcp.run(transport="http", host="0.0.0.0", port=port, stateless_http=True)
 
 
 if __name__ == "__main__":
