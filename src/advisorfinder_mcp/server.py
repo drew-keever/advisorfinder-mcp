@@ -397,8 +397,8 @@ def check_advisor(name_or_crd: str, firm: str | None = None, state: str | None =
     they have been in the industry, and their four-state disclosure status.
     Accepts EITHER a CRD number (all digits) OR a name — optionally narrowed
     by firm/state to disambiguate common names. If a name matches more than
-    one advisor, returns candidates instead of guessing; re-run with the CRD
-    from the list.
+    one advisor, returns the candidates with their CRD numbers instead of
+    guessing.
     This tool never returns a numeric risk score — only the underlying facts
     (registration status, disclosure status) so you can judge for yourself.
     """
@@ -505,7 +505,7 @@ def find_bookable_advisors(
     """Search advisors listed on AdvisorFinder's marketplace — professionals
     with public profiles you can view and contact directly. This searches
     only AdvisorFinder members (a few hundred advisors), not the full
-    SEC roster; use search_advisors for the full roster.
+    SEC roster.
 
     All filters are optional — browsing with none of them is fine, since this
     tool's scope is already narrow. `specialty` matches against the advisor's
@@ -522,15 +522,15 @@ def find_bookable_advisors(
     "%" removed, unset markers dropped; the "percent of assets" unit only
     when the listed values are plain numbers); minimum account size; allowed
     states; and more), a link to their full AdvisorFinder profile, AND regulatory facts for their CRD.
-    Members whose CRD is in our SEC dataset get the same registration status
-    and four-state disclosure status check_advisor reports — never softened.
+    Members whose CRD is in our SEC dataset get their registration status
+    and four-state disclosure status from that dataset — never softened.
     Members whose CRD is NOT in our SEC dataset (typically state-registered
     or BD-side advisors) get a labeled note saying so, with FINRA
     BrokerCheck / SEC IAPD verify links — never presented as if clean. AUM
     and client-count figures are self-reported by the advisor, not
     regulatory data, and are always labeled as such. Being listed here is a
     business relationship with AdvisorFinder, not an endorsement, and never
-    affects how any advisor ranks in search_advisors/check_advisor.
+    affects how any advisor ranks in search results.
     """
     if db.marketplace_stats() is None:
         return format.envelope({

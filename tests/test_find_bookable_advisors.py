@@ -159,9 +159,8 @@ def test_find_bookable_note_copy_is_exact():
 
 def test_find_bookable_docstring_discloses_marketplace_only_scope():
     doc = server.find_bookable_advisors.__doc__ or ""
-    assert "search_advisors" in doc
     assert "AdvisorFinder" in doc
-    assert "SEC roster" in doc
+    assert "not the full SEC roster" in " ".join(doc.split())
 
 
 def test_find_bookable_limit_clamped_high(monkeypatch):
