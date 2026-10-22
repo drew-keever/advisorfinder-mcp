@@ -39,7 +39,7 @@ No account, no API key, no authentication — it's free and read-only.
 - **15,000+ SEC-registered advisory firms** — size, fee arrangements, ADV-filed fee structures, branch locations, prior names
 - **16,000+ state-registered advisory firms** (reduced profiles)
 - **A few hundred of those advisors** are also listed on the AdvisorFinder marketplace, searchable directly via `find_bookable_advisors`
-- Four-state disclosure status per advisor, derived from the SEC roster flag
+- Four-state disclosure status per advisor, derived from the SEC roster flag. A marketplace member whose CRD is not in our SEC dataset gets the status `not_in_regulatory_dataset` instead, with FINRA BrokerCheck / SEC IAPD verify links; it is not one of the four disclosure states and never means a clean record.
 
 ## AdvisorFinder marketplace
 

@@ -69,19 +69,20 @@ def _individual_verify_links(crd: str) -> dict:
 
 
 def _parse_exam_json(raw) -> list:
+    """Exam entries ({name, date, scope}) with `date` as YYYY-MM-DD (or None
+    when absent/unreadable). Production stores M/D/YYYY."""
     if not raw:
         return []
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return []
-    return data if isinstance(data, list) else []
-
-
-def _split_states(raw: str | None) -> list[str]:
-    if not raw:
+    if not isinstance(data, list):
         return []
-    return [s.strip() for s in raw.split(",") if s.strip()]
+    return [
+        {**e, "date": format.iso_date(e.get("date"))} if isinstance(e, dict) and "date" in e else e
+        for e in data
+    ]
 
 
 def _firm_verify_links(crd: str) -> dict:
@@ -169,8 +170,9 @@ def search_advisors(
     disclosed_no_detail / disclosed_with_detail / unknown — never "clean"),
     and a link to the advisor's full SEC IAPD record. Data is derived from SEC
     IAPD / FINRA BrokerCheck registration feeds, not real-time. Exact name
-    matches rank first; `more_results_available` appears when more advisors
-    match than the limit returns.
+    matches rank first. `total_matches` is the number of advisors that match
+    the filters; `more_results_available` appears when more advisors match
+    than the limit returns.
     """
     if not any([name, firm, city, state]):
         return format.envelope({
@@ -190,6 +192,12 @@ def search_advisors(
     rows = db.search_advisors(name=name, firm=firm, city=city, state=state, limit=clamped_limit + 1)
     more_results = len(rows) > clamped_limit
     rows = rows[:clamped_limit]
+    # One COUNT(*) over the same WHERE as the search (db._advisor_where);
+    # skipped when the page already holds every match.
+    total = (
+        db.count_advisors(name=name, firm=firm, city=city, state=state)
+        if more_results else len(rows)
+    )
 
     results = []
     for r in rows:
@@ -222,7 +230,7 @@ def search_advisors(
             entry["advisorfinder_listing"] = listing
         results.append(entry)
 
-    payload = {"result_count": len(results), "results": results}
+    payload = {"result_count": len(results), "total_matches": total, "results": results}
     if more_results:
         payload["more_results_available"] = True
         payload["more_results_hint"] = (
@@ -234,11 +242,20 @@ def search_advisors(
             "a last name, or search the official sources directly."
         )
 
-    # Generic name-search fallback links always populate `verify`, whether or
-    # not this specific call found anything — each result row also carries
-    # its own iapd_link, but envelope()'s `verify` is meant to always be
-    # populated with something actionable, not left as {} by default.
-    return format.envelope(payload, verify=format.name_search_urls(name or firm or ""))
+    # Generic name-search fallback links populate `verify` whenever there is
+    # a name (or firm) to search for, whether or not this call found
+    # anything. A city/state-only browse has no name to search, so it gets no
+    # verify links (each result row still carries its own iapd_link) --
+    # except on a miss, which gets the official search pages so a record we
+    # do not hold can still be looked up.
+    search_text = name or firm
+    if search_text:
+        verify = format.name_search_urls(search_text)
+    elif not results:
+        verify = format.official_search_home_urls()
+    else:
+        verify = None
+    return format.envelope(payload, verify=verify)
 
 
 @mcp.tool(title="Get advisor profile", annotations=_read_only("Get advisor profile"))
@@ -254,7 +271,16 @@ def get_advisor(crd: str) -> dict:
     self-reported — none of this data is independently verified), years in
     the industry, and four-state disclosure status (never phrased as
     "clean"/"safe": none_reported / disclosed_no_detail / disclosed_with_detail
-    / unknown). Data is derived from SEC IAPD / FINRA BrokerCheck.
+    / unknown). Data is derived from SEC IAPD / FINRA BrokerCheck. All dates
+    are YYYY-MM-DD. For an advisor who is also listed on AdvisorFinder,
+    `advisorfinder_listing.self_reported` carries the credentials and years
+    of experience from that profile, labeled as such. Each designation has a
+    `source` (e.g. "Form ADV Part 2B brochure supplement"). When no
+    designations are on file but the profile lists some,
+    `designations_coverage_note` explains that the public data covers few
+    advisors; when both lists are present and not the same,
+    `credential_sources_note` says so. Neither note is a finding against the
+    advisor.
     """
     bundle = db.get_advisor(crd)
     if bundle is None:
@@ -273,12 +299,14 @@ def get_advisor(crd: str) -> dict:
 
     # merge_employment_rows() collapses the adviser/broker row pair IAPD
     # returns for one job, and labels the capacity when it is derivable.
+    # Dates are normalized AFTER the merge: merge_employment_rows() groups on
+    # the raw start/end strings.
     employment = [
         {
             "firm_name": format.title_case_firm_name(e["firm_name"]),
             "is_current": e["is_current"],
-            "start_date": e["start_date"],
-            "end_date": e["end_date"],
+            "start_date": format.iso_date(e["start_date"]),
+            "end_date": format.iso_date(e["end_date"]),
             "branch_city": format.title_case_name(e["branch_city"]) if e["branch_city"] else None,
             "branch_state": e["branch_state"],
             **({"capacity": e["capacity"]} if "capacity" in e else {}),
@@ -293,7 +321,11 @@ def get_advisor(crd: str) -> dict:
     }
 
     designations = [
-        {"code": d["code"], "name": d["name"], "issuing_body": d["issuing_body"], "status": "self-reported"}
+        {
+            "code": d["code"], "name": d["name"], "issuing_body": d["issuing_body"],
+            "status": "self-reported",
+            "source": format.designation_source_label(d.get("source")),
+        }
         for d in bundle["designations"]
     ]
 
@@ -306,8 +338,9 @@ def get_advisor(crd: str) -> dict:
         if content["match_method"] == "name_unique":
             caveats.append("Bio matched by name within firm — verify it refers to the right person.")
 
-    industry_start_date = iar["industry_start_date"] if iar else None
-    years_in_industry = format.years_since(industry_start_date)
+    raw_start = iar["industry_start_date"] if iar else None
+    industry_start_date = format.iso_date(raw_start)
+    years_in_industry = format.years_since(raw_start)
 
     disclosure = format.disclosure_status(rep["has_disclosure"], iar)
 
@@ -338,7 +371,17 @@ def get_advisor(crd: str) -> dict:
     # instead of the generic homepage.
     marketplace_row, listing = _marketplace_listing_for(crd)
     if listing is not None:
+        # The profile's own credentials and experience, labeled as from the
+        # AdvisorFinder profile. Only the designation lists are compared
+        # (exam licenses and degrees left out); experience is never compared.
+        # No designations on file is missing public data, not a difference.
+        profile = format.marketplace_profile_facts(marketplace_row)
+        listing["self_reported"] = profile
         payload["advisorfinder_listing"] = listing
+        if format.designations_coverage_gap(bundle["designations"], profile["credentials"]):
+            payload["designations_coverage_note"] = format.DESIGNATIONS_COVERAGE_NOTE
+        elif format.credential_sources_differ(bundle["designations"], profile["credentials"]):
+            payload["credential_sources_note"] = format.CREDENTIAL_SOURCES_NOTE
 
     return format.envelope(
         payload,
@@ -351,7 +394,7 @@ def get_advisor(crd: str) -> dict:
 def _check_verdict(crd: str, bundle: dict) -> dict:
     rep = bundle["rep"]
     iar = bundle["iar"]
-    industry_start_date = iar["industry_start_date"] if iar else None
+    raw_start = iar["industry_start_date"] if iar else None
     disclosure = format.disclosure_status(rep["has_disclosure"], iar)
     # "Can this person advise me in my state?" is the question this tool
     # answers, so the broker-dealer fact belongs here too — a bare "no" about
@@ -369,8 +412,8 @@ def _check_verdict(crd: str, bundle: dict) -> dict:
         "name": _full_name(rep["first_name"], rep["middle_name"], rep["last_name"], rep["name_suffix"]),
         "registration": registration,
         "experience": {
-            "industry_start_date": industry_start_date,
-            "years_in_industry": format.years_since(industry_start_date),
+            "industry_start_date": format.iso_date(raw_start),
+            "years_in_industry": format.years_since(raw_start),
         },
         "disclosure": disclosure,
     }
@@ -464,9 +507,9 @@ def _regulatory_join(crd: str) -> tuple[dict, dict]:
     registration.active + four-state disclosure.
 
     ADJUDICATED 2026-08-09 (Gate A2): the None branch below is a REAL,
-    reachable path, not defensive dead code — 132/294 real marketplace members
+    reachable path, not defensive dead code — some real marketplace members
     are state-registered/BD-side advisors legitimately absent from the SEC
-    roster (ia_reps). sanitize_marketplace.py ships their row anyway
+    roster (ia_reps): 98 of 294 in the 2026-08-28 export. sanitize_marketplace.py ships their row anyway
     (crd_mismatches is reported but no longer build-fatal), so db.get_advisor(crd)
     genuinely returns None for them. Returns a labeled fallback disclosure
     block (format.marketplace_unmatched_crd_disclosure) instead of crashing or
@@ -495,6 +538,12 @@ def _regulatory_join(crd: str) -> tuple[dict, dict]:
     return registration, disclosure
 
 
+_PROFILE_FIELDS_NOTE = (
+    "allowed_states and virtual_meetings_offered are null when the member did "
+    "not fill them in: null means not stated on the profile, not \"none\"."
+)
+
+
 @mcp.tool(title="Find bookable advisors", annotations=_read_only("Find bookable advisors"))
 def find_bookable_advisors(
     specialty: str | None = None,
@@ -521,16 +570,23 @@ def find_bookable_advisors(
     profile and formatting normalized (type/frequency lowercased, a trailing
     "%" removed, unset markers dropped; the "percent of assets" unit only
     when the listed values are plain numbers); minimum account size; allowed
-    states; and more), a link to their full AdvisorFinder profile, AND regulatory facts for their CRD.
+    states; `member_since` as YYYY-MM-DD; and more), a link to their full
+    AdvisorFinder profile, AND regulatory facts for their CRD.
+    `allowed_states` and `virtual_meetings_offered` are null when the member
+    did not fill them in: null means not stated on the profile, not "none".
     Members whose CRD is in our SEC dataset get their registration status
-    and four-state disclosure status from that dataset — never softened.
+    and four-state disclosure status (none_reported / disclosed_no_detail /
+    disclosed_with_detail / unknown) from that dataset — never softened.
     Members whose CRD is NOT in our SEC dataset (typically state-registered
-    or BD-side advisors) get a labeled note saying so, with FINRA
-    BrokerCheck / SEC IAPD verify links — never presented as if clean. AUM
-    and client-count figures are self-reported by the advisor, not
-    regulatory data, and are always labeled as such. Being listed here is a
-    business relationship with AdvisorFinder, not an endorsement, and never
-    affects how any advisor ranks in search results.
+    or BD-side advisors) get the status `not_in_regulatory_dataset` with a
+    labeled note saying so and FINRA BrokerCheck / SEC IAPD verify links —
+    never presented as if clean. AUM and client-count figures are
+    self-reported by the advisor, not regulatory data, and are always
+    labeled as such. Results are in alphabetical order by name; membership
+    or payment has no effect on the order. `total_matches` is the number of
+    members that match the filters. Being listed here is a business
+    relationship with AdvisorFinder, not an endorsement, and never affects
+    how any advisor ranks in search results.
     """
     if db.marketplace_stats() is None:
         return format.envelope({
@@ -541,7 +597,9 @@ def find_bookable_advisors(
         })
 
     clamped_limit = max(1, min(limit, 50))
-    rows = db.search_marketplace(specialty=specialty, city=city, state=state, limit=clamped_limit)
+    rows, total = db.search_marketplace_with_total(
+        specialty=specialty, city=city, state=state, limit=clamped_limit
+    )
 
     results = []
     for row in rows:
@@ -558,20 +616,24 @@ def find_bookable_advisors(
         # in production it holds only UI field keys ("aum", "clientNumber"),
         # not content.
         clean = format.clean_text
+        credentials = format.marketplace_credentials(row["credentials"])
         entry = {
             "crd": crd,
-            "name": clean(row["displayName"]),
+            # A trailing ", CFP®" is removed only when it is one of this
+            # member's own listed credentials (format.marketplace_display_name).
+            "name": format.marketplace_display_name(row["displayName"], credentials),
             "company": clean(row["companyName"]),
             "city": clean(row["city"]),
             "state": row["state"],
             "bio": format.clean_prose(row["bio"]),
-            "credentials": format.marketplace_credentials(row["credentials"]),
+            "credentials": credentials,
             "client_description": format.clean_prose(row["clientDescription"]),
             "min_account_size": row["minAccountSize"],
             "years_of_experience": row["yearsOfExperience"],
-            "virtual_meetings_offered": row["virtualMeetingsOffered"],
+            # None when not filled in on the profile (see profile_fields_note).
+            "virtual_meetings_offered": format.marketplace_flag(row["virtualMeetingsOffered"]),
             "allowed_states": format.marketplace_states(row["allowedStates"]),
-            "member_since": row["memberSince"],
+            "member_since": format.iso_date(row["memberSince"]),
             # Links: "https://" added when the profile omits a scheme; any
             # non-http(s) scheme is dropped (format.normalize_url).
             "website": format.normalize_url(row["advisorWebsiteURL"]),
@@ -591,13 +653,17 @@ def find_bookable_advisors(
         }
         results.append(entry)
 
-    payload = {"result_count": len(results), "results": results}
-    if not results:
+    payload = {"result_count": len(results), "total_matches": total, "results": results}
+    if results:
+        payload["profile_fields_note"] = _PROFILE_FIELDS_NOTE
+    else:
         payload["not_found_guidance"] = (
             "No AdvisorFinder members matched your search. Try a different "
             "specialty, city, or state — or use search_advisors for the "
             "full SEC roster (not marketplace-only)."
         )
+        # A miss still gets the official search pages.
+        return format.envelope(payload, verify=format.official_search_home_urls())
     return format.envelope(payload)
 
 
@@ -626,14 +692,15 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     come first, then firms with more advisors on file (a state-registered-
     only firm ranks as an undisclosed band with no advisors). A result can
     carry `advisor_count_note` (no advisor records on file) or `unreadable_characters_note` (characters
-    lost in the source data, shown as \ufffd).
+    lost in the source data, shown as \ufffd). `total_matches` is the number
+    of firms that match the filters.
     """
     unsanitizable = _unsanitizable_supplied_filter(name=name)
     if unsanitizable:
         return _unsanitizable_filter_error(*unsanitizable)
 
     clamped_limit = max(1, min(limit, 50))
-    rows = db.search_firms(name=name, state=state, limit=clamped_limit)
+    rows, total = db.search_firms_with_total(name=name, state=state, limit=clamped_limit)
 
     results = []
     for r in rows:
@@ -660,27 +727,43 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
             )
         results.append(entry)
 
-    payload = {"result_count": len(results), "results": results}
+    payload = {"result_count": len(results), "total_matches": total, "results": results}
     if not results:
         payload["not_found_guidance"] = "No firms matched your search."
 
-    # Same rationale as search_advisors: `verify` always carries generic
-    # name-search fallback links, not just on a miss.
-    verify = {
-        "iapd": format.iapd_firm_search_url(name or ""),
-        "brokercheck": format.brokercheck_firm_search_url(name or ""),
-    }
+    # Same rationale as search_advisors: `verify` carries generic name-search
+    # fallback links whenever there is a name to search, not just on a miss.
+    # A state-only browse has no name, so it gets no verify links, except
+    # on a miss, which gets the official search pages.
+    verify = None
+    if name:
+        verify = {
+            "iapd": format.iapd_firm_search_url(name),
+            "brokercheck": format.brokercheck_firm_search_url(name),
+        }
+    elif not results:
+        verify = format.official_search_home_urls()
     return format.envelope(payload, verify=verify)
+
+
+_PRIVATE_RESIDENCE_NOTE = (
+    "Address withheld — private residence (SEC privacy protection). These "
+    "office locations are counted in private_residence_locations_withheld "
+    "and are not listed in locations."
+)
 
 
 @mcp.tool(title="Get firm profile", annotations=_read_only("Get firm profile"))
 def get_firm(crd: str) -> dict:
     """Get the full profile for an investment adviser FIRM by CRD number:
     identity, address, website, AUM band, total employees, how they charge
-    (a list), any disclosure flag, state registrations,
-    office locations (private-residence addresses are withheld per SEC
+    (a list), any disclosure flag, state registrations (a list of
+    {state, date}, date YYYY-MM-DD or null), office locations (private
+    residences are not listed: their count is in
+    `private_residence_locations_withheld`, addresses withheld per SEC
     privacy rules), prior/other names, fee details from their ADV Part 2A
-    brochure (marked as estimated when it is), and `advisor_count`: how many
+    brochure (marked as estimated when it is, and basis "not extracted" when
+    no fee details were extracted), and `advisor_count`: how many
     investment adviser representatives we have on file for them
     (broker-dealer-only registrations are not counted; an empty roster does
     not necessarily mean an empty firm — see the caveat when that happens).
@@ -718,7 +801,7 @@ def get_firm(crd: str) -> dict:
             "total_employees": s["total_employees"],
             # No roster for a purely state-registered firm (see caveat above).
             "advisor_count": None,
-            "states_approved": _split_states(s["states_approved"]),
+            "states_approved": format.state_registrations(s["states_approved"]),
         }
         if format.has_unreadable_chars(payload["name"], payload["city"]):
             caveats.append(format.UNREADABLE_CHARS_CAVEAT)
@@ -727,14 +810,14 @@ def get_firm(crd: str) -> dict:
     f = bundle["firm"]
     fees = [label for flag, label in _FEE_LABELS.items() if f[flag] == "Y"]
 
+    # Private residences (no street on file) are counted, not listed: a list
+    # of "address withheld" entries crowded out the real offices (Vanguard
+    # Advisers: 22 of 25 locations).
     locations = []
+    private_withheld = 0
     for loc in bundle["locations"]:
         if loc["private_res"] == "Y" and not loc["street1"]:
-            locations.append({
-                "address": "Address withheld — private residence (SEC privacy protection)",
-                "city": loc["city"],
-                "state": loc["state"],
-            })
+            private_withheld += 1
         else:
             locations.append({
                 "street1": loc["street1"],
@@ -791,7 +874,7 @@ def get_firm(crd: str) -> dict:
         ),
         "fee_arrangements": fees,
         "any_disciplinary": f["any_disciplinary"],
-        "state_registrations": _split_states(f["state_registrations"]),
+        "state_registrations": format.state_registrations(f["state_registrations"]),
         "locations": locations,
         "other_names": other_names,
         "fees": format.fee_block(bundle["part2a"]),
@@ -800,13 +883,16 @@ def get_firm(crd: str) -> dict:
         # shipped key do not break.
         "advisor_roster_count": bundle["roster_count"],
     }
+    if private_withheld:
+        payload["private_residence_locations_withheld"] = private_withheld
+        payload["private_residence_note"] = _PRIVATE_RESIDENCE_NOTE
     # Lost characters (U+FFFD) are shown as they are and labeled, never
     # guessed. Checks every returned name/address field.
     if format.has_unreadable_chars(
         payload["name"], payload["legal_name"],
         payload["address"]["street1"], payload["address"]["city"],
         *other_names,
-        *(loc.get(k) for loc in locations for k in ("street1", "city", "address")),
+        *(loc.get(k) for loc in locations for k in ("street1", "city")),
     ):
         caveats.append(format.UNREADABLE_CHARS_CAVEAT)
     return format.envelope(payload, caveats=caveats, verify=_firm_verify_links(crd))
@@ -855,10 +941,12 @@ def get_database_stats() -> dict:
         "firms_count": int(meta.get("firms_count", 0)),
         "state_firms_count": state_firms_count,
         "advisors_count": advisors_count,
+        # export_meta's individuals_as_of is NOT a vintage of this data: it
+        # dates the ADV Schedule A owners file (ia_individuals), a table the
+        # export forbids. Nothing a tool returns comes from it.
         "vintages": {
             "advisors_as_of": meta.get("ia_reps_as_of"),
             "firms_as_of": meta.get("firms_as_of"),
-            "individuals_bulk_as_of": meta.get("individuals_as_of"),
         },
         "disclosure_tally": tally,
         "marketplace": marketplace,

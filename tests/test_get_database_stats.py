@@ -5,16 +5,17 @@ def test_envelope_keys_present():
     result = server.get_database_stats()
     assert "data_as_of" in result
     assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
-    assert "verify" in result
+    # `verify` is present only when there are links to give (format.envelope).
+    assert result.get("verify", True) != {}
     assert "coverage_caveats" in result
 
 
-def test_verify_is_deliberately_empty_no_specific_crd_to_check():
+def test_verify_is_deliberately_absent_no_specific_crd_to_check():
     # Unlike the advisor/firm tools, get_database_stats isn't about any one
-    # CRD — there's no specific IAPD/BrokerCheck record to point at, so
-    # `verify` staying {} here is a deliberate choice, not an oversight.
+    # CRD — there's no specific IAPD/BrokerCheck record to point at, so there
+    # is no `verify` key at all (never an empty {}).
     result = server.get_database_stats()
-    assert result["verify"] == {}
+    assert "verify" not in result
 
 
 def test_counts_match_fixture():
@@ -31,6 +32,14 @@ def test_vintages_present():
     result = server.get_database_stats()
     assert result["vintages"]["advisors_as_of"] == "2026-05-20"
     assert result["vintages"]["firms_as_of"] == "2026-05-01"
+
+
+def test_vintages_have_no_individuals_bulk_date():
+    # The individuals bulk file (ADV Schedule A owners, ia_individuals) is a
+    # forbidden table in the export: nothing this server returns comes from
+    # it, so its date is not a vintage of this data.
+    result = server.get_database_stats()
+    assert set(result["vintages"]) == {"advisors_as_of", "firms_as_of"}
 
 
 def test_disclosure_tally_includes_unknown_bucket():

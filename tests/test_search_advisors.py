@@ -8,7 +8,8 @@ from advisorfinder_mcp import server
 def _envelope_keys_present(result):
     assert "data_as_of" in result
     assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
-    assert "verify" in result
+    # `verify` is present only when there are links to give (format.envelope).
+    assert result.get("verify", True) != {}
     assert "coverage_caveats" in result
 
 
@@ -355,3 +356,65 @@ def test_tie_break_is_case_insensitive_and_orders_middle_flag_last():
     tb = db._TIE_BREAK
     assert tb.index("lower(last_name)") < tb.index("lower(first_name)") < tb.index("middle_name IS NOT NULL")
     assert "lower(middle_name)" in tb and tb.endswith("ind_source_id")
+
+
+# ── verify links only when there is a name to search ────────────────────────
+
+def test_city_only_search_has_no_name_search_verify_links():
+    result = server.search_advisors(city="New York")
+    assert result["result_count"] > 0
+    assert "verify" not in result
+    assert "query=" not in str(result)
+
+
+def test_state_only_search_has_no_name_search_verify_links():
+    result = server.search_advisors(state="NY")
+    assert "verify" not in result
+
+
+def test_firm_search_verify_links_search_the_firm():
+    result = server.search_advisors(firm="alpha wealth")
+    assert result["verify"]["iapd"].endswith("query=alpha%20wealth")
+
+
+# ── total_matches ───────────────────────────────────────────────────────────
+
+def test_total_matches_when_truncated():
+    result = server.search_advisors(name="smith", limit=2)
+    assert result["result_count"] == 2
+    assert result["total_matches"] == 4
+    assert isinstance(result["total_matches"], int)
+
+
+def test_total_matches_equals_result_count_when_not_truncated():
+    result = server.search_advisors(name="smith", limit=20)
+    assert result["total_matches"] == result["result_count"] == 4
+
+
+def test_total_matches_zero_on_no_match():
+    result = server.search_advisors(name="zzznomatchzzz")
+    assert result["total_matches"] == 0
+
+
+def test_total_matches_uses_the_same_filters_as_the_search():
+    from advisorfinder_mcp import db
+    for kwargs in (
+        {"state": "NY"}, {"city": "new york"}, {"firm": "alpha"},
+        {"name": "smith", "state": "NY"}, {"name": "john smith"},
+    ):
+        everything = db.search_advisors(limit=10_000, **kwargs)
+        assert db.count_advisors(**kwargs) == len(everything), kwargs
+        assert server.search_advisors(**kwargs)["total_matches"] == len(everything), kwargs
+
+
+def test_no_filter_error_has_no_total():
+    assert "total_matches" not in server.search_advisors()
+
+
+def test_no_name_miss_gets_official_search_home_links():
+    result = server.search_advisors(city="Nowhereville")
+    assert result["result_count"] == 0
+    assert result["verify"] == {
+        "iapd": "https://adviserinfo.sec.gov/",
+        "brokercheck": "https://brokercheck.finra.org/",
+    }

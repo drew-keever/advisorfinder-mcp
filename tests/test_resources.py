@@ -65,3 +65,33 @@ def test_coverage_resource_discloses_marketplace():
         "every result, never affects search ranking, and is not an endorsement. "
         "Regulatory data is shown identically for all advisors."
     ) in text
+
+
+def test_no_individuals_bulk_vintage_in_resources():
+    # ia_individuals (the individuals bulk file) is a forbidden export table;
+    # no data this server returns comes from it.
+    for text in (resources.data_sources(), resources.coverage_and_limitations()):
+        assert "Individuals bulk" not in text
+        assert "2024-12-31" not in text
+
+
+# The sentence that names the marketplace-only status, mirrored across the
+# three places that explain disclosure statuses.
+_EXTRA_STATUS_SENTENCE = (
+    "A marketplace member whose CRD is not in our SEC dataset gets the status "
+    "`not_in_regulatory_dataset` instead, with FINRA BrokerCheck / SEC IAPD "
+    "verify links; it is not one of the four disclosure states and never "
+    "means a clean record."
+)
+
+
+def test_extra_status_sentence_mirrored_in_resources_readme_and_help():
+    from pathlib import Path
+    root = Path(__file__).parent.parent
+    texts = {
+        "resources.data_sources": resources.data_sources(),
+        "README.md": (root / "README.md").read_text(),
+        "docs/mcp-help.md": (root / "docs" / "mcp-help.md").read_text(),
+    }
+    for where, text in texts.items():
+        assert _EXTRA_STATUS_SENTENCE in " ".join(text.split()), where

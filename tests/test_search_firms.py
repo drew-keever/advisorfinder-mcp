@@ -4,7 +4,8 @@ from advisorfinder_mcp import format, server
 def _envelope_keys_present(result):
     assert "data_as_of" in result
     assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
-    assert "verify" in result
+    # `verify` is present only when there are links to give (format.envelope).
+    assert result.get("verify", True) != {}
     assert "coverage_caveats" in result
 
 
@@ -514,8 +515,33 @@ def test_marketplace_membership_is_not_a_ranking_factor():
     import textwrap
 
     from advisorfinder_mcp import db
-    for fn in (db.search_firms, db._firm_name_tier, db.all_roster_counts):
+    for fn in (db.search_firms, db.search_firms_with_total, db._firm_name_tier, db.all_roster_counts):
         node = ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
         if ast.get_docstring(node) is not None:
             node.body = node.body[1:]  # the docstring may say "never a factor"
         assert "marketplace" not in ast.unparse(node).lower(), fn.__name__
+
+
+# ── total_matches + verify links only with a name ───────────────────────────
+
+def test_search_firms_total_matches():
+    full = server.search_firms(state="NY", limit=50)
+    assert full["total_matches"] == full["result_count"]
+    one = server.search_firms(state="NY", limit=1)
+    assert one["result_count"] == 1
+    assert one["total_matches"] == full["total_matches"]
+    assert server.search_firms(name="zzznomatchzzz")["total_matches"] == 0
+
+
+def test_search_firms_state_only_has_no_name_search_verify_links():
+    result = server.search_firms(state="NY")
+    assert "verify" not in result
+
+
+def test_search_firms_no_name_miss_gets_official_search_home_links():
+    result = server.search_firms(state="ZZ")
+    assert result["result_count"] == 0
+    assert result["verify"] == {
+        "iapd": "https://adviserinfo.sec.gov/",
+        "brokercheck": "https://brokercheck.finra.org/",
+    }

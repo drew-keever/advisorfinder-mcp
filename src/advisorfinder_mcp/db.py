@@ -135,6 +135,57 @@ def disclosure_tally() -> dict:
 
 # ── advisor search ────────────────────────────────────────────────────────────
 
+def _advisor_where(name=None, firm=None, city=None, state=None) -> tuple[list[str], list]:
+    """(WHERE clauses over ia_reps, bound params) for the name/firm/city/state
+    filters. Shared by search_advisors and count_advisors, so the total and
+    the returned page always use the same filters. See search_advisors for
+    the filter semantics."""
+    where = ["1=1"]
+    params: list = []
+
+    firm_city_state_conditions = []
+    firm_city_state_params: list = []
+    if firm:
+        q = fts_query(firm)
+        if q:
+            firm_city_state_conditions.append(
+                "crd_number IN (SELECT DISTINCT crd_number FROM firm_fts WHERE firm_fts MATCH ?)"
+            )
+            firm_city_state_params.append(q)
+    if city:
+        firm_city_state_conditions.append("branch_city = ? COLLATE NOCASE")
+        firm_city_state_params.append(city)
+    if state:
+        firm_city_state_conditions.append("branch_state = ? COLLATE NOCASE")
+        firm_city_state_params.append(state)
+
+    if firm_city_state_conditions:
+        sub_where = " AND ".join(firm_city_state_conditions)
+        where.append(f"ind_source_id IN (SELECT ind_source_id FROM ia_rep_firms WHERE {sub_where})")
+        params.extend(firm_city_state_params)
+
+    if name:
+        q = fts_query(name)
+        if q:  # empty-after-sanitize -> treat as absent: no clause added
+            where.append(
+                "ind_source_id IN (SELECT ind_source_id FROM advisor_fts WHERE advisor_fts MATCH ?)"
+            )
+            params.append(q)
+    return where, params
+
+
+def count_advisors(name=None, firm=None, city=None, state=None) -> int:
+    """Number of advisors search_advisors() would match with no limit: one
+    COUNT(*) over the same WHERE (_advisor_where), never a fetch of every
+    row. Production (2026-08-28 export, warm): state=CA 42,214 rows in
+    ~40 ms; firm="llc" 268,283 rows in ~0.3 s."""
+    where, params = _advisor_where(name=name, firm=firm, city=city, state=state)
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM ia_reps WHERE " + " AND ".join(where), params
+        ).fetchone()[0]
+
+
 def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> list[dict]:
     """Returns up to `limit` advisor bundles matching all supplied filters
     (AND semantics across name/firm/city/state). Each bundle: ind_source_id,
@@ -177,37 +228,7 @@ def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> li
     check_advisor do.
     """
     with get_conn() as conn:
-        where = ["1=1"]
-        params: list = []
-
-        firm_city_state_conditions = []
-        firm_city_state_params: list = []
-        if firm:
-            q = fts_query(firm)
-            if q:
-                firm_city_state_conditions.append(
-                    "crd_number IN (SELECT DISTINCT crd_number FROM firm_fts WHERE firm_fts MATCH ?)"
-                )
-                firm_city_state_params.append(q)
-        if city:
-            firm_city_state_conditions.append("branch_city = ? COLLATE NOCASE")
-            firm_city_state_params.append(city)
-        if state:
-            firm_city_state_conditions.append("branch_state = ? COLLATE NOCASE")
-            firm_city_state_params.append(state)
-
-        if firm_city_state_conditions:
-            sub_where = " AND ".join(firm_city_state_conditions)
-            where.append(f"ind_source_id IN (SELECT ind_source_id FROM ia_rep_firms WHERE {sub_where})")
-            params.extend(firm_city_state_params)
-
-        if name:
-            q = fts_query(name)
-            if q:  # empty-after-sanitize -> treat as absent: no clause added
-                where.append(
-                    "ind_source_id IN (SELECT ind_source_id FROM advisor_fts WHERE advisor_fts MATCH ?)"
-                )
-                params.append(q)
+        where, params = _advisor_where(name=name, firm=firm, city=city, state=state)
 
         # Name ranking applies only when a usable name filter was given. Tiers
         # compare lower(first/last_name) to the RAW rank tokens (bound
@@ -298,8 +319,16 @@ def get_advisor(crd: str) -> dict | None:
 # ── firm search ───────────────────────────────────────────────────────────────
 
 def search_firms(name=None, state=None, limit=20) -> list[dict]:
-    """Returns up to `limit` firm bundles. firm_fts kinds: primary/legal/other
-    (from `firms`) and state (from firms_state). The two tables are NOT
+    """Up to `limit` firm bundles: search_firms_with_total() without the
+    total. See that function for the matching and ordering rules."""
+    return search_firms_with_total(name=name, state=state, limit=limit)[0]
+
+
+def search_firms_with_total(name=None, state=None, limit=20) -> tuple[list[dict], int]:
+    """(page, total): up to `limit` firm bundles, and the number of firms
+    that matched before the limit (after the firms/firms_state dedupe).
+
+    firm_fts kinds: primary/legal/other (from `firms`) and state (from firms_state). The two tables are NOT
     disjoint (139 CRDs are in both in production): a firms_state row whose CRD
     is already returned from `firms` is skipped, so each CRD appears once and
     the full `firms` row (with its roster count) wins. `kinds` on each bundle is the set of kinds that matched (or,
@@ -370,7 +399,7 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
                             entry["other_rank"] = rank
                             entry["other_name"] = hit_name
                 if not hits:
-                    return []
+                    return [], 0
 
         # Only the columns used below: a broad name matches ~20k firms.
         cols = "crd_number, primary_name, address_city, address_state, aum_band"
@@ -457,7 +486,7 @@ def search_firms(name=None, state=None, limit=20) -> list[dict]:
         for r in page:
             if not r["state_only"]:
                 r["advisor_count"] = counts.get(r["crd_number"], 0)
-        return page
+        return page, len(results)
 
 
 # search_firms name tiers (lower ranks first). "Own" names are the firm's
@@ -599,8 +628,21 @@ def search_marketplace(
     state: str | None = None,
     limit: int = 20,
 ) -> list[sqlite3.Row]:
-    """Returns up to `limit` marketplace_advisors rows matching all supplied
-    filters (AND semantics), ordered by displayName. `city`/`state` are exact
+    """Up to `limit` rows: search_marketplace_with_total() without the
+    total. See that function for the matching and ordering rules."""
+    return search_marketplace_with_total(specialty=specialty, city=city, state=state, limit=limit)[0]
+
+
+def search_marketplace_with_total(
+    specialty: str | None = None,
+    city: str | None = None,
+    state: str | None = None,
+    limit: int = 20,
+) -> tuple[list[sqlite3.Row], int]:
+    """(page, total): up to `limit` marketplace_advisors rows matching all
+    supplied filters (AND semantics), and the number that matched before the
+    limit. Ordered alphabetically by displayName (case-insensitive), then
+    crd -- nothing else; membership details never change the order. `city`/`state` are exact
     NOCASE equality in SQL. `specialty` is a case-insensitive substring match
     against format.marketplace_search_text(row): the CLEANED bio, client
     description, in-their-own-words answers, and credential acronyms/names.
@@ -610,11 +652,11 @@ def search_marketplace(
     CFP entry says "fiduciary"), so a LIKE over it matched advisors on text
     that says nothing about them, and on JSON keys. 294 rows in production,
     so loading the city/state-filtered rows and filtering here is cheap. The
-    limit is applied AFTER the specialty filter. Empty list (not an error)
+    limit is applied AFTER the specialty filter. ([], 0) (not an error)
     when the table is absent."""
     with get_conn() as conn:
         if not _marketplace_table_exists(conn):
-            return []
+            return [], 0
 
         where = ["1=1"]
         params: list = []
@@ -631,14 +673,14 @@ def search_marketplace(
         # unspecified, and free to reshuffle on any rebuild/VACUUM.
         sql = (
             "SELECT * FROM marketplace_advisors WHERE " + " AND ".join(where)
-            + " ORDER BY displayName"
+            + " ORDER BY displayName COLLATE NOCASE, crd"
         )
         rows = conn.execute(sql, params).fetchall()
 
     needle = specialty.strip().casefold() if specialty else ""
     if needle:
         rows = [r for r in rows if needle in marketplace_search_text(r)]
-    return rows[:limit]
+    return rows[:limit], len(rows)
 
 
 def marketplace_stats() -> dict | None:

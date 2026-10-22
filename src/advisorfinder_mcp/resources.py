@@ -38,7 +38,11 @@ public regulatory sources:
 
 We store: registrations, employment history, exams passed, self-reported
 professional designations, and a four-state disclosure STATUS (none
-reported / disclosed-no-detail / disclosed-with-detail / unknown). We do
+reported / disclosed-no-detail / disclosed-with-detail / unknown). A
+marketplace member whose CRD is not in our SEC dataset gets the status
+`not_in_regulatory_dataset` instead, with FINRA BrokerCheck / SEC IAPD
+verify links; it is not one of the four disclosure states and never means a
+clean record. We do
 NOT store disclosure event detail (allegations, settlement amounts,
 narratives) — disclosure detail is deliberately not included here. Always
 check FINRA BrokerCheck / SEC IAPD directly for the full disclosure record
@@ -49,7 +53,6 @@ before making any decision.
 Our current copy was refreshed as of:
 - Advisor (IAR) data: {meta.get('ia_reps_as_of')}
 - Firm data: {meta.get('firms_as_of')}
-- Individuals bulk file: {meta.get('individuals_as_of')}
 
 Use the `get_database_stats` tool for live counts and vintages.
 
@@ -115,7 +118,6 @@ BrokerCheck / SEC IAPD verify links included.
 
 - Advisor (IAR) data: {meta.get('ia_reps_as_of')}
 - Firm data: {meta.get('firms_as_of')}
-- Individuals bulk file: {meta.get('individuals_as_of')}
 
 ## What an empty result means
 

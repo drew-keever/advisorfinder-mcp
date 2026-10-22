@@ -30,7 +30,8 @@ NO_MARKETPLACE_FIXTURE_DB = Path(__file__).parent / "fixtures" / "mcp_public_no_
 def _envelope_keys_present(result):
     assert "data_as_of" in result
     assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
-    assert "verify" in result
+    # `verify` is present only when there are links to give (format.envelope).
+    assert result.get("verify", True) != {}
     assert "coverage_caveats" in result
 
 
@@ -168,9 +169,9 @@ def test_find_bookable_limit_clamped_high(monkeypatch):
 
     def fake_search_marketplace(**kwargs):
         captured["limit"] = kwargs["limit"]
-        return []
+        return [], 0
 
-    monkeypatch.setattr(server.db, "search_marketplace", fake_search_marketplace)
+    monkeypatch.setattr(server.db, "search_marketplace_with_total", fake_search_marketplace)
     server.find_bookable_advisors(limit=999)
     assert captured["limit"] == 50
 
@@ -180,9 +181,9 @@ def test_find_bookable_limit_clamped_low(monkeypatch):
 
     def fake_search_marketplace(**kwargs):
         captured["limit"] = kwargs["limit"]
-        return []
+        return [], 0
 
-    monkeypatch.setattr(server.db, "search_marketplace", fake_search_marketplace)
+    monkeypatch.setattr(server.db, "search_marketplace_with_total", fake_search_marketplace)
     server.find_bookable_advisors(limit=0)
     assert captured["limit"] == 1
 
@@ -202,7 +203,7 @@ def test_find_bookable_zero_members_build_is_not_same_as_table_absent(monkeypatc
     # "not available in this deployment" message -- only genuine table
     # absence should trip that branch.
     monkeypatch.setattr(server.db, "marketplace_stats", lambda: {"count": 0, "snapshot_date": "2026-01-01"})
-    monkeypatch.setattr(server.db, "search_marketplace", lambda **kwargs: [])
+    monkeypatch.setattr(server.db, "search_marketplace_with_total", lambda **kwargs: ([], 0))
     result = server.find_bookable_advisors()
     assert result.get("available") is not False
     assert result["result_count"] == 0
@@ -288,7 +289,7 @@ _RAW_OR_GARBLED = re.compile(r'\{"S":|\{"M":|"N":|Ã|â€|ðŸ|Â®')
 
 
 def test_find_bookable_cleans_production_shaped_row(monkeypatch):
-    monkeypatch.setattr(db, "search_marketplace", lambda **kw: [_PROD_SHAPED_ROW])
+    monkeypatch.setattr(db, "search_marketplace_with_total", lambda **kw: ([_PROD_SHAPED_ROW], 1))
     result = server.find_bookable_advisors()
     entry = result["results"][0]
     assert entry["credentials"] == [
@@ -377,7 +378,7 @@ def test_find_bookable_links_get_https_scheme(monkeypatch):
         "bioVideoLink": "javascript:alert(1)",
         "profile_url": "advisorfinder.com/app/advisor-profile/x/y",
     })
-    monkeypatch.setattr(db, "search_marketplace", lambda **kw: [row])
+    monkeypatch.setattr(db, "search_marketplace_with_total", lambda **kw: ([row], 1))
     entry = server.find_bookable_advisors()["results"][0]
     assert entry["website"] == "https://mgrwealth.com"
     assert entry["linkedin"] == "https://linkedin.com/in/Jake-Hughes-CFP®"  # case and ® kept
@@ -392,3 +393,96 @@ def test_find_bookable_links_with_scheme_unchanged():
     assert by_crd["1000002"]["website"] == "https://johnsmithadvisors.example.com"
     assert by_crd["1000002"]["linkedin"] == "https://linkedin.com/in/johnqsmith"
     assert by_crd["1000003"]["website"] is None  # empty stays None
+
+
+# ── total_matches, order, and the description ───────────────────────────────
+
+def test_find_bookable_total_matches():
+    full = server.find_bookable_advisors()
+    assert full["total_matches"] == full["result_count"] == 3
+    one = server.find_bookable_advisors(limit=1)
+    assert one["result_count"] == 1
+    assert one["total_matches"] == 3
+    assert server.find_bookable_advisors(specialty="cfp", limit=1)["total_matches"] == 2
+    assert server.find_bookable_advisors(specialty="zzznomatch")["total_matches"] == 0
+
+
+def test_find_bookable_results_are_alphabetical_by_name():
+    names = [r["name"] for r in server.find_bookable_advisors()["results"]]
+    assert names == sorted(names, key=str.casefold)
+
+
+def _description(name):
+    import asyncio
+    tool = asyncio.run(server.mcp.get_tool(name))
+    return " ".join((tool.description or "").split())
+
+
+def test_find_bookable_description_states_order_and_extra_status():
+    text = _description("find_bookable_advisors")
+    assert "alphabetical order by name" in text
+    assert "no effect on the order" in text
+    assert "not_in_regulatory_dataset" in text
+    assert "not stated on the profile" in text
+
+
+# ── dates, unset profile fields, display names ──────────────────────────────
+
+def test_find_bookable_member_since_is_iso(monkeypatch):
+    for raw, expected in (
+        ("Mon May 05 2025 12:59:41 GMT+0000 (Coordinated Universal Time)", "2025-05-05"),
+        ("2024-08-14 20:25:09", "2024-08-14"),
+        (None, None),
+    ):
+        row = {**_PROD_SHAPED_ROW, "memberSince": raw}
+        monkeypatch.setattr(db, "search_marketplace_with_total", lambda row=row, **kw: ([row], 1))
+        assert server.find_bookable_advisors()["results"][0]["member_since"] == expected
+
+
+def test_find_bookable_unset_profile_fields_are_null_not_empty():
+    result = server.find_bookable_advisors()
+    by_crd = {r["crd"]: r for r in result["results"]}
+    minimal = by_crd["1000003"]  # allowedStates "" and no virtual-meetings value
+    assert minimal["allowed_states"] is None
+    assert minimal["virtual_meetings_offered"] is None
+    rich = by_crd["1000002"]
+    assert rich["allowed_states"] == ["NY", "NJ", "CT"]
+    assert rich["virtual_meetings_offered"] is True  # "Yes"
+    assert by_crd["1000010"]["virtual_meetings_offered"] is False  # "No"
+    note = result["profile_fields_note"]
+    assert "not stated on the profile" in note
+    assert "allowed_states" in note and "virtual_meetings_offered" in note
+
+
+def test_find_bookable_production_flag_and_states(monkeypatch):
+    row = {**_PROD_SHAPED_ROW, "virtualMeetingsOffered": "1",
+           "allowedStates": '[{"S":"TX"},{"S":"OK"},{"S":"NM"},{"S":"LA"}]'}
+    monkeypatch.setattr(db, "search_marketplace_with_total", lambda **kw: ([row], 1))
+    entry = server.find_bookable_advisors()["results"][0]
+    assert entry["virtual_meetings_offered"] is True
+    assert entry["allowed_states"] == ["TX", "OK", "NM", "LA"]
+
+
+def test_find_bookable_strips_own_credential_suffix_from_name(monkeypatch):
+    row = {**_PROD_SHAPED_ROW, "displayName": "John Q. Smith, CFP®, CFA"}
+    monkeypatch.setattr(db, "search_marketplace_with_total", lambda **kw: ([row], 1))
+    assert server.find_bookable_advisors()["results"][0]["name"] == "John Q. Smith"
+
+
+def test_find_bookable_keeps_suffix_that_is_not_an_own_credential(monkeypatch):
+    row = {**_PROD_SHAPED_ROW, "displayName": "John Q. Smith, CPWA®"}
+    monkeypatch.setattr(db, "search_marketplace_with_total", lambda **kw: ([row], 1))
+    assert server.find_bookable_advisors()["results"][0]["name"] == "John Q. Smith, CPWA®"
+
+
+def test_find_bookable_has_no_empty_verify():
+    assert "verify" not in server.find_bookable_advisors()
+
+
+def test_find_bookable_miss_gets_official_search_home_links():
+    result = server.find_bookable_advisors(city="Nowhere", state="ZZ")
+    assert result["result_count"] == 0
+    assert result["verify"] == {
+        "iapd": "https://adviserinfo.sec.gov/",
+        "brokercheck": "https://brokercheck.finra.org/",
+    }

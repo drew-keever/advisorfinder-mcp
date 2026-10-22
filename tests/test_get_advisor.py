@@ -198,3 +198,136 @@ def test_get_advisor_nonmember_has_no_listing_block():
     result = server.get_advisor(crd="1000001")
     assert "advisorfinder_listing" not in result
     assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
+
+
+# ── dates are YYYY-MM-DD ────────────────────────────────────────────────────
+
+def test_unparseable_industry_start_date_is_null_not_raw():
+    result = server.get_advisor(crd="1000001")  # industry_start_date="not-a-real-date"
+    assert result["industry_start_date"] is None
+
+
+def test_production_date_formats_are_normalized(monkeypatch):
+    from advisorfinder_mcp import db
+
+    real = db.get_advisor
+
+    def forced(crd):
+        bundle = real(crd)
+        bundle["iar"] = {
+            **bundle["iar"],
+            "industry_start_date": "8/19/2003",
+            "state_exams": '[{"name": "Series 63", "date": "1/17/2006", "scope": "BOTH"}]',
+            "product_exams": '[{"name": "Series 65", "date": "12/11/2015", "scope": "IA"},'
+                             ' {"name": "X", "date": null, "scope": "IA"}]',
+        }
+        return bundle
+
+    monkeypatch.setattr(db, "get_advisor", forced)
+    result = server.get_advisor(crd="1000002")
+    assert result["industry_start_date"] == "2003-08-19"
+    assert isinstance(result["years_in_industry"], int) and result["years_in_industry"] >= 20
+    assert result["exams"]["state"] == [{"name": "Series 63", "date": "2006-01-17", "scope": "BOTH"}]
+    assert [e["date"] for e in result["exams"]["product"]] == ["2015-12-11", None]
+    for job in result["employment"]:
+        for key in ("start_date", "end_date"):
+            assert job[key] is None or len(job[key]) == 10
+
+
+# ── marketplace listing: the profile's own credentials and experience ──────
+
+def test_listing_carries_self_reported_profile_credentials_and_experience():
+    listing = server.get_advisor(crd="1000002")["advisorfinder_listing"]
+    profile = listing["self_reported"]
+    assert profile["credentials"] == "CFP, CFA"  # fixture: plain text
+    assert profile["years_of_experience"] == 15
+    assert profile["label"] == format.SELF_REPORTED_LABEL
+
+
+def test_credential_sources_note_when_both_lists_present_and_differ():
+    # Fixture: designations [CFP]; profile credentials "CFP, CFA".
+    result = server.get_advisor(crd="1000002")
+    assert result["credential_sources_note"] == format.CREDENTIAL_SOURCES_NOTE
+    note = " ".join(result["credential_sources_note"].split())
+    assert "are not the same list" in note
+    assert "not independently verified" in note
+    assert "a difference is not by itself a problem" in note
+    assert "designations_coverage_note" not in result
+
+
+def test_designations_carry_a_source_label(monkeypatch):
+    # Fixture source value "cfp_board" is not a production value: passed as is.
+    assert server.get_advisor(crd="1000002")["designations"][0]["source"] == "cfp_board"
+    from advisorfinder_mcp import db
+    real = db.get_advisor
+
+    def forced(crd):
+        bundle = real(crd)
+        bundle["designations"] = [
+            {**bundle["designations"][0], "source": "part2b"},
+            {**bundle["designations"][0], "code": "CFA", "source": "website_title"},
+        ]
+        return bundle
+
+    monkeypatch.setattr(db, "get_advisor", forced)
+    sources = [d["source"] for d in server.get_advisor(crd="1000002")["designations"]]
+    assert sources == ["Form ADV Part 2B brochure supplement", "firm website"]
+
+
+def test_no_credential_notes_for_nonmember_or_matching_lists(monkeypatch):
+    nonmember = server.get_advisor(crd="1000001")
+    assert "credential_sources_note" not in nonmember
+    assert "designations_coverage_note" not in nonmember
+    from advisorfinder_mcp import db
+    row = dict(db.get_marketplace_by_crd("1000002"))
+    row["credentials"] = "CFP, MBA"  # a degree is not compared
+    monkeypatch.setattr(db, "get_marketplace_by_crd", lambda crd: row)
+    result = server.get_advisor(crd="1000002")
+    assert "credential_sources_note" not in result
+    assert "designations_coverage_note" not in result
+
+
+def test_designations_coverage_note_for_production_shape(monkeypatch):
+    # David Calliott (CRD 5820086) in production: no designations on record,
+    # CFP® on the AdvisorFinder profile. Missing public data is not a
+    # difference between the lists.
+    import json
+
+    from advisorfinder_mcp import db
+    real = db.get_advisor
+
+    def forced(crd):
+        bundle = real(crd)
+        bundle["designations"] = []
+        return bundle
+
+    row = dict(db.get_marketplace_by_crd("1000002"))
+    row["credentials"] = json.dumps([
+        {"M": {"acronym": {"S": "CFP®"}, "value": {"S": "Certified Financial Planner™"},
+               "sortingPriority": {"N": "0"}}},
+        {"M": {"acronym": {"S": "Series 7"}, "value": {"S": "Series 7"},
+               "sortingPriority": {"N": "1"}}},
+    ])
+    row["yearsOfExperience"] = 13
+    monkeypatch.setattr(db, "get_advisor", forced)
+    monkeypatch.setattr(db, "get_marketplace_by_crd", lambda crd: row)
+    result = server.get_advisor(crd="1000002")
+    assert result["designations"] == []
+    profile = result["advisorfinder_listing"]["self_reported"]
+    assert profile["credentials"][0] == {
+        "acronym": "CFP®", "name": "Certified Financial Planner™", "status": "self-reported",
+    }
+    assert profile["years_of_experience"] == 13
+    assert "credential_sources_note" not in result
+    assert result["designations_coverage_note"] == format.DESIGNATIONS_COVERAGE_NOTE
+    note = " ".join(result["designations_coverage_note"].split())
+    assert "does not mean this advisor holds no designations" in note
+    assert "Form ADV Part 2B" in note
+
+
+def test_get_advisor_description_names_both_notes():
+    import asyncio
+    tool = asyncio.run(server.mcp.get_tool("get_advisor"))
+    text = " ".join((tool.description or "").split())
+    assert "designations_coverage_note" in text
+    assert "credential_sources_note" in text

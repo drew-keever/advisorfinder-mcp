@@ -95,7 +95,7 @@ No CRD numbers needed — search by name, firm, city, or state.
 | `get_firm` | Full firm profile by CRD: locations, other/prior names, fee schedule (from Form ADV Part 2A where available), disciplinary flags, and the number of investment adviser representatives on file. |
 | `get_database_stats` | Database-wide stats: firm and advisor counts, data vintages (as-of dates for each upstream source), and a full four-state disclosure tally. |
 
-**Disclosure status is always one of four honest states** — `none_reported`, `disclosed_no_detail`, `disclosed_with_detail`, or `unknown` — never phrased as "clean" or "safe." When we don't have a record for someone, every tool returns direct links to [SEC IAPD](https://adviserinfo.sec.gov) and [FINRA BrokerCheck](https://brokercheck.finra.org) so you can still look them up through official sources.
+**Disclosure status is always one of four honest states** — `none_reported`, `disclosed_no_detail`, `disclosed_with_detail`, or `unknown` — never phrased as "clean" or "safe." A marketplace member whose CRD is not in our SEC dataset gets the status `not_in_regulatory_dataset` instead, with FINRA BrokerCheck / SEC IAPD verify links; it is not one of the four disclosure states and never means a clean record. When we don't have a record for someone, every tool returns direct links to [SEC IAPD](https://adviserinfo.sec.gov) and [FINRA BrokerCheck](https://brokercheck.finra.org) so you can still look them up through official sources.
 
 ## Resources
 

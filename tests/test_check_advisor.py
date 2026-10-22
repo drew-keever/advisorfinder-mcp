@@ -203,3 +203,8 @@ def test_check_does_not_auto_select_single_exact_match(monkeypatch):
     assert result["ambiguous"] is True
     assert len(result["candidates"]) == 2
     assert "found" not in result
+
+
+def test_check_industry_start_date_is_iso_or_null():
+    assert server.check_advisor(name_or_crd="1000002")["experience"]["industry_start_date"] == "2011-06-15"
+    assert server.check_advisor(name_or_crd="1000001")["experience"]["industry_start_date"] is None

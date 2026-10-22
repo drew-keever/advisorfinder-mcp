@@ -271,6 +271,15 @@ def name_search_urls(name: str) -> dict:
     }
 
 
+def official_search_home_urls() -> dict:
+    """The SEC IAPD and FINRA BrokerCheck search pages, for a search miss
+    that has no name to put in a search link."""
+    return {
+        "iapd": "https://adviserinfo.sec.gov/",
+        "brokercheck": "https://brokercheck.finra.org/",
+    }
+
+
 def iapd_firm_search_url(name: str) -> str:
     q = urllib.parse.quote(name or "")
     return f"https://adviserinfo.sec.gov/search/genericsearch/gridCurrent498?query={q}"
@@ -345,9 +354,21 @@ def disclosure_status(has_disclosure: str | None, iar_row: Any) -> dict:
 
 # ── fee_block ─────────────────────────────────────────────────────────────────
 
+FEES_NOT_EXTRACTED_NOTE = (
+    "No fee details were extracted from this firm's ADV Part 2A brochure. "
+    "The brochure is on the firm's SEC IAPD record (link in verify)."
+)
+
+
 def fee_block(part2a_row: Any) -> dict | None:
     """None if the firm has no firm_part2a row. Never emits a fee number
-    without a "basis" field alongside it."""
+    without a "basis" field alongside it.
+
+    When no fee value was extracted (no rate, no tiers, no notes, no account
+    minimum -- 0 IS a value), basis is "not extracted" with a note instead
+    of the "estimated" disclaimer: there is no estimate to qualify. 3,747 of
+    14,243 production rows are like this (3,001 of them also have no
+    brochure date)."""
     if part2a_row is None:
         return None
 
@@ -362,13 +383,28 @@ def fee_block(part2a_row: Any) -> dict | None:
     is_estimate = bool(_row_value(part2a_row, "fee_rate_is_estimate", 0))
     needs_review = bool(_row_value(part2a_row, "needs_review", 0))
 
+    rate = _row_value(part2a_row, "fee_rate_blended")
+    notes = _row_value(part2a_row, "fee_notes")
+    account_minimum = _row_value(part2a_row, "account_minimum")
+    if (rate is None and not tiers and not (isinstance(notes, str) and notes.strip())
+            and account_minimum is None):
+        return {
+            "rate": None,
+            "tiers": None,
+            "notes": None,
+            "account_minimum": None,
+            "brochure_date": iso_date(_row_value(part2a_row, "brochure_date")),
+            "basis": "not extracted",
+            "note": FEES_NOT_EXTRACTED_NOTE,
+        }
+
     block = {
         "rate": _row_value(part2a_row, "fee_rate_blended"),
         "tiers": tiers,
         "notes": _row_value(part2a_row, "fee_notes"),
         "account_minimum": _row_value(part2a_row, "account_minimum"),
         "account_minimum_waivable": bool(_row_value(part2a_row, "account_minimum_waivable", 0)),
-        "brochure_date": _row_value(part2a_row, "brochure_date"),
+        "brochure_date": iso_date(_row_value(part2a_row, "brochure_date")),
     }
 
     if is_estimate or needs_review:
@@ -687,15 +723,207 @@ def marketplace_pricing(raw):
     return out
 
 
-def marketplace_states(raw) -> list[str]:
+def marketplace_states(raw) -> list[str] | None:
     """Allowed-state list from the marketplace allowedStates column: a
-    DynamoDB/JSON list (["TX", "OK"]) or comma-separated text ("NY,NJ")."""
+    DynamoDB/JSON list (["TX", "OK"]) or comma-separated text ("NY,NJ").
+    None when the member did not fill in the field (292 of 294 production
+    rows): an empty list would read as "serves no states"."""
     data = unwrap_dynamodb(raw)
     if isinstance(data, str):
-        return _split_state_csv(data)
-    if not isinstance(data, list):
+        states = _split_state_csv(data)
+    elif isinstance(data, list):
+        states = [t for t in (_text_or_none(v) for v in data) if t]
+    else:
+        states = []
+    return states or None
+
+
+_FLAG_TRUE = frozenset({"1", "y", "yes", "true"})
+_FLAG_FALSE = frozenset({"0", "n", "no", "false"})
+
+
+def marketplace_flag(raw) -> bool | None:
+    """A yes/no profile field (virtualMeetingsOffered: "1" in production,
+    "Yes"/"No" in the fixture) as True/False. None when the member did not
+    fill it in or the value is not a recognized yes/no -- never guessed."""
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, int):
+        raw = str(raw)
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().casefold()
+    if value in _FLAG_TRUE:
+        return True
+    if value in _FLAG_FALSE:
+        return False
+    return None
+
+
+# Removed before comparing a credential suffix in a display name with the
+# member's own acronyms: "CFP ®", "CFP(r)" and "CFP®" all compare as "CFP".
+_CREDENTIAL_MARKS_RE = re.compile(r"[®™©]|\((?:r|tm|c)\)|\s", re.IGNORECASE)
+
+
+def _credential_key(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _CREDENTIAL_MARKS_RE.sub("", value).upper()
+
+
+def _credential_entries(credentials) -> list[tuple[str, str]]:
+    """(normalized acronym, name) pairs from marketplace_credentials()
+    output: a list of {"acronym", "name", ...} entries, or plain
+    comma-separated text ("CFP, CFA"), which has no names."""
+    if isinstance(credentials, str):
+        return [(k, "") for k in (_credential_key(p) for p in credentials.split(",")) if k]
+    if not isinstance(credentials, list):
         return []
-    return [t for t in (_text_or_none(v) for v in data) if t]
+    out = []
+    for c in credentials:
+        if not isinstance(c, dict):
+            continue
+        key = _credential_key(c.get("acronym"))
+        if key:
+            name = c.get("name")
+            out.append((key, name if isinstance(name, str) else ""))
+    return out
+
+
+def _own_acronym_keys(credentials) -> set[str]:
+    """Normalized acronyms from marketplace_credentials() output (every
+    entry, degrees and exam licenses included)."""
+    return {key for key, _ in _credential_entries(credentials)}
+
+
+# Academic degrees are not professional designations, so the credential
+# comparison leaves them out (production profiles list MBA, JD, MSFP and
+# "MS in Business Administration"). Keys are _credential_key() values with
+# dots removed ("Ph.D." -> "PHD"). BFA is left out on purpose: in
+# advisor_designations it is the Behavioral Financial Advisor designation.
+_DEGREE_KEYS = frozenset({
+    "AA", "AS", "BA", "BS", "BBA", "BSBA", "MA", "MS", "MSC", "MBA",
+    "MFA", "MPA", "MPH", "MACC", "MST", "MSF", "MSFP", "MSFS", "MED", "JD",
+    "LLM", "PHD", "EDD", "DBA",
+})
+_DEGREE_KEY_PREFIXES = ("MASTER", "BACHELOR", "DOCTOR")
+# A degree-letters key followed by "IN..." ("MSINBUSINESSADMINISTRATION").
+_DEGREE_IN_RE = re.compile(r"(?:MS|MA|BS|BA|MBA)IN[A-Z]+")
+# A degree by its full name; "Master Registered Financial Consultant" (MRFC)
+# is a designation, so "Master" alone is not enough.
+_DEGREE_NAME_RE = re.compile(r"\s*(?:(?:master|bachelor|doctor)s?\s+of\b|juris\s+doctor\b)", re.IGNORECASE)
+
+
+def _is_degree(key: str, name: str = "") -> bool:
+    bare = key.replace(".", "")
+    return (
+        bare in _DEGREE_KEYS
+        or bare.startswith(_DEGREE_KEY_PREFIXES)
+        or bool(_DEGREE_IN_RE.fullmatch(bare))
+        or bool(_DEGREE_NAME_RE.match(name or ""))
+    )
+
+
+def _designation_keys(credentials) -> set[str]:
+    """The profile acronyms that are professional designations: exam
+    licenses ("Series 65" -- regulatory records list them as exams) and
+    academic degrees are left out."""
+    return {
+        key for key, name in _credential_entries(credentials)
+        if not key.startswith("SERIES") and not _is_degree(key, name)
+    }
+
+
+def marketplace_display_name(name, credentials):
+    """The marketplace displayName without trailing ", <credential>" parts
+    ("David Calliott, CFP®" -> "David Calliott"). A part is removed only
+    when it matches one of this member's own credential acronyms
+    (`credentials` is marketplace_credentials() output), working from the
+    right and stopping at the first part that does not match, so a real name
+    is never cut: "D. Vance Barse, CPWA®, AIF®" with only AIF® listed keeps
+    "CPWA®". The first part is never removed."""
+    name = clean_text(name)
+    if not isinstance(name, str) or "," not in name:
+        return name
+    own = _own_acronym_keys(credentials)
+    if not own:
+        return name
+    parts = name.split(",")
+    while len(parts) > 1 and _credential_key(parts[-1]) in own:
+        parts.pop()
+    return ",".join(parts).strip()
+
+
+# Both lists present and not the same.
+CREDENTIAL_SOURCES_NOTE = (
+    "The designations on file from Form ADV Part 2B (designations) and the "
+    "credentials on the advisor's AdvisorFinder profile "
+    "(advisorfinder_listing.self_reported.credentials) are not the same list. "
+    "Both are self-reported and not independently verified; a difference is "
+    "not by itself a problem. Confirm any credential with the issuing body."
+)
+
+# No designations on file, credentials on the profile. Missing public data
+# is not a difference between the lists: advisor_designations covers few
+# advisors (342 in the 2026-08-28 export, nearly all from Part 2B).
+DESIGNATIONS_COVERAGE_NOTE = (
+    "No professional designations are on file for this advisor in our public "
+    "data. That data comes from Form ADV Part 2B brochure supplements and "
+    "covers only a small share of advisors, so an empty list does not mean "
+    "this advisor holds no designations. The credentials in "
+    "advisorfinder_listing.self_reported come from the advisor's own "
+    "AdvisorFinder profile and are not independently verified. Confirm any "
+    "credential with the issuing body."
+)
+
+
+def _public_designation_keys(designations) -> set[str]:
+    keys = {_credential_key(_row_value(d, "code")) for d in designations or []}
+    keys.discard("")
+    return {k for k in keys if not _is_degree(k)}
+
+
+def credential_sources_differ(designations, profile_credentials) -> bool:
+    """True when BOTH the public designations and the profile's
+    designations (see _designation_keys: no exam licenses, no degrees) are
+    present and are not the same set. An empty public list is missing data,
+    not a difference (see designations_coverage_gap)."""
+    profile = _designation_keys(profile_credentials)
+    public = _public_designation_keys(designations)
+    return bool(profile) and bool(public) and profile != public
+
+
+def designations_coverage_gap(designations, profile_credentials) -> bool:
+    """True when no designations are on file in the public data but the
+    profile lists at least one designation (exam licenses and degrees do not
+    count)."""
+    return not _public_designation_keys(designations) and bool(_designation_keys(profile_credentials))
+
+
+# advisor_designations.source -> label. Production holds only these two
+# values; any other value is passed through as is.
+_DESIGNATION_SOURCE_LABELS = {
+    "part2b": "Form ADV Part 2B brochure supplement",
+    "website_title": "firm website",
+}
+
+
+def designation_source_label(source):
+    """Readable label for an advisor_designations.source value."""
+    if not isinstance(source, str) or not source.strip():
+        return None
+    return _DESIGNATION_SOURCE_LABELS.get(source.strip(), source.strip())
+
+
+def marketplace_profile_facts(row) -> dict:
+    """The member's own credentials and years of experience, labeled as
+    self-reported on their AdvisorFinder profile -- for get_advisor's
+    advisorfinder_listing, next to the designations from public data."""
+    return {
+        "credentials": marketplace_credentials(_row_value(row, "credentials")),
+        "years_of_experience": _row_value(row, "yearsOfExperience"),
+        "label": SELF_REPORTED_LABEL,
+    }
 
 
 def marketplace_text_list(raw) -> list[str]:
@@ -728,9 +956,11 @@ def marketplace_search_text(row) -> str:
 
 
 # ── marketplace member with no regulatory-dataset match (Gate A2 Ruling 1) ───
-# ADJUDICATED 2026-08-09 (Gate A2): 132/294 real marketplace members are
+# ADJUDICATED 2026-08-09 (Gate A2): some real marketplace members are
 # state-registered/BD-side advisors whose CRDs legitimately never appear in
-# ia_reps (the SEC roster) -- sanitize_marketplace.py ships their row anyway
+# ia_reps (the exported SEC roster; 98 of 294 members in the 2026-08-28
+# export -- export_meta.marketplace_crd_unmatched counts against the
+# unscoped source roster and so reports fewer) -- sanitize_marketplace.py ships their row anyway
 # (crd_mismatches is reported but no longer build-fatal, see
 # scripts/sanitize_marketplace.py in the firm-intelligence repo). This is
 # therefore a REAL, reachable server path, not a defensive fallback for data
@@ -866,19 +1096,51 @@ def firm_rank_key(raw: str | None) -> str:
     return " ".join(tokens[:end])
 
 
-# ── flexible date parsing (SEC data mixes ISO and M/D/YYYY) ──────────────────
+# ── flexible date parsing (the data mixes several date formats) ─────────────
+# Formats in the 2026-08-28 production export:
+#   YYYY-MM-DD            advisor_employments start/end dates
+#   YYYY-MM-DD HH:MM:SS   marketplace memberSince (211 rows)
+#   M/D/YYYY              industry_start_date, exam dates, brochure_date,
+#                         firm state-registration dates ("AK-04/14/2009")
+#   JavaScript Date text  marketplace memberSince (82 rows):
+#                         "Mon May 05 2025 12:59:41 GMT+0000 (Coordinated
+#                         Universal Time)" -- all GMT+0000; the date is taken
+#                         as written.
+
+_ISO_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:[ T][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
+_MDY_DATE_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+_JS_DATE_RE = re.compile(r"[A-Z][a-z]{2} ([A-Z][a-z]{2}) (\d{2}) (\d{4})(?: .*)?")
+_MONTHS = {m: i for i, m in enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
+
 
 def parse_flexible_date(raw: str | None) -> date | None:
-    """Tries ISO (YYYY-MM-DD) then M/D/YYYY; never raises — unparseable input
-    (including garbage strings) returns None."""
-    if not raw:
+    """A date from any format listed above; never raises -- empty,
+    unparseable or impossible input (2/30/2020) returns None."""
+    if not isinstance(raw, str):
         return None
-    for fmt_str in ("%Y-%m-%d", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(raw, fmt_str).date()
-        except ValueError:
-            continue
+    text = raw.strip()
+    try:
+        m = _ISO_DATE_RE.fullmatch(text)
+        if m:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        m = _MDY_DATE_RE.fullmatch(text)
+        if m:
+            return date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+        m = _JS_DATE_RE.fullmatch(text)
+        if m and m.group(1) in _MONTHS:
+            return date(int(m.group(3)), _MONTHS[m.group(1)], int(m.group(2)))
+    except ValueError:
+        return None
     return None
+
+
+def iso_date(raw) -> str | None:
+    """"YYYY-MM-DD" for a date in any format parse_flexible_date() reads;
+    None for empty or unparseable input (never guessed). Every date a tool
+    returns goes through this."""
+    d = parse_flexible_date(raw)
+    return d.isoformat() if d else None
 
 
 def years_since(raw: str | None) -> int | None:
@@ -911,7 +1173,9 @@ def envelope(
     profile via advisorfinder_profile_url() instead of the generic
     homepage. Left as None (the default) for list-shaped/multi-advisor tools
     (search_advisors, find_bookable_advisors, get_database_stats, ...),
-    where a single per-response link to one advisor wouldn't make sense."""
+    where a single per-response link to one advisor wouldn't make sense.
+
+    `verify` is left out of the result when it is empty or None."""
     from . import db  # local import: db.py never imports format.py, so this
     # is a one-directional dependency, not a cycle — deferred only to keep
     # format.py importable in isolation (e.g. before a DB path is set).
@@ -921,16 +1185,19 @@ def envelope(
         f"advisor data as of {meta.get('ia_reps_as_of')}; "
         f"firm data as of {meta.get('firms_as_of')}"
     )
-    return {
+    out = {
         **payload,
         "data_as_of": data_as_of,
         "advisorfinder": {
             "link": advisorfinder_profile_url(marketplace_row),
             "note": "Compare financial advisors on AdvisorFinder.",
         },
-        "verify": verify or {},
-        "coverage_caveats": caveats or [],
     }
+    # `verify` only when there are links: never an empty {}.
+    if verify:
+        out["verify"] = verify
+    out["coverage_caveats"] = caveats or []
+    return out
 
 
 # ── advisory-state wording (APPROVED by Drew 2026-08-18) ─────────────────────
@@ -982,6 +1249,27 @@ def _split_state_csv(raw) -> list[str]:
     if not raw:
         return []
     return [s.strip() for s in str(raw).split(",") if s.strip()]
+
+
+# "AK-04/14/2009" (firms.state_registrations) or "VA:2023-01-03"
+# (firms_state.states_approved). The date itself can hold hyphens, so the
+# state is the leading letters before the first "-" or ":".
+_STATE_DATE_RE = re.compile(r"([A-Za-z]{2,})\s*[-:]\s*(.*)")
+
+
+def state_registrations(raw) -> list[dict]:
+    """[{"state": "AK", "date": "2009-04-14"}, ...] from a comma-separated
+    state registration column. date is None when the entry has no date or
+    it cannot be read; a token that is not "ST-date"/"ST:date" is the state
+    as given."""
+    out = []
+    for token in _split_state_csv(raw):
+        m = _STATE_DATE_RE.fullmatch(token)
+        if m:
+            out.append({"state": m.group(1).upper(), "date": iso_date(m.group(2))})
+        else:
+            out.append({"state": token, "date": None})
+    return out
 
 
 def advisory_states_block(iar_row) -> dict:

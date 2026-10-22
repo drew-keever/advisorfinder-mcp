@@ -61,10 +61,21 @@ def test_get_firm_never_emits_sovereign_even_when_serves_sovereign_is_y(monkeypa
     assert "sovereign" not in json.dumps(result, default=str).lower()
 
 
-def test_private_residence_location_phrasing():
+def test_private_residence_locations_are_counted_not_listed():
+    # 100002's only location is a private residence with no street.
     result = server.get_firm(crd="100002")
-    priv = next(loc for loc in result["locations"] if "address" in loc)
-    assert priv["address"] == "Address withheld — private residence (SEC privacy protection)"
+    assert result["locations"] == []
+    assert result["private_residence_locations_withheld"] == 1
+    assert "Address withheld — private residence (SEC privacy protection)" in (
+        result["private_residence_note"]
+    )
+
+
+def test_no_private_residence_keys_when_none_withheld():
+    result = server.get_firm(crd="100001")
+    assert "private_residence_locations_withheld" not in result
+    assert "private_residence_note" not in result
+    assert all("address" not in loc for loc in result["locations"])
 
 
 def test_normal_location_has_street():
@@ -235,3 +246,90 @@ def test_get_firm_state_only_with_fffd_gets_caveat(tmp_path, monkeypatch):
     result = server.get_firm(crd="500001")
     assert result["reduced_profile"] is True
     assert format.UNREADABLE_CHARS_CAVEAT in result["coverage_caveats"]
+
+
+# ── state registrations, fee block, dates ──────────────────────────────────
+
+def _forced_firm(monkeypatch, **changes):
+    from advisorfinder_mcp import db
+
+    real = db.get_firm
+
+    def forced(crd):
+        bundle = real(crd)
+        for key, value in changes.items():
+            if key == "firm":
+                bundle["firm"] = {**dict(bundle["firm"]), **value}
+            else:
+                bundle[key] = value
+        return bundle
+
+    monkeypatch.setattr(db, "get_firm", forced)
+
+
+def test_state_registrations_are_objects_without_dates_in_fixture():
+    result = server.get_firm(crd="100001")  # fixture value "NY,FL"
+    assert result["state_registrations"] == [
+        {"state": "NY", "date": None}, {"state": "FL", "date": None},
+    ]
+
+
+def test_state_registrations_production_format(monkeypatch):
+    _forced_firm(monkeypatch, firm={"state_registrations": "AK-04/14/2009, CA-03/13/2025"})
+    result = server.get_firm(crd="100001")
+    assert result["state_registrations"] == [
+        {"state": "AK", "date": "2009-04-14"}, {"state": "CA", "date": "2025-03-13"},
+    ]
+
+
+def test_reduced_profile_states_approved_production_format(monkeypatch):
+    from advisorfinder_mcp import db
+
+    real = db.get_firm
+
+    def forced(crd):
+        bundle = real(crd)
+        bundle["state_firm"] = {**bundle["state_firm"], "states_approved": "VA:2023-01-03,MD:2024-02-02"}
+        return bundle
+
+    monkeypatch.setattr(db, "get_firm", forced)
+    result = server.get_firm(crd="500001")
+    assert result["states_approved"] == [
+        {"state": "VA", "date": "2023-01-03"}, {"state": "MD", "date": "2024-02-02"},
+    ]
+
+
+def test_fee_brochure_date_is_iso(monkeypatch):
+    part2a = {
+        "crd_number": "100001", "brochure_name": "X", "brochure_date": "3/30/2026",
+        "fee_rate_blended": 0.01, "fee_rate_is_estimate": 0, "fee_tiers_json": None,
+        "fee_notes": None, "account_minimum": None, "account_minimum_waivable": 0,
+        "needs_review": 0,
+    }
+    _forced_firm(monkeypatch, part2a=part2a)
+    assert server.get_firm(crd="100001")["fees"]["brochure_date"] == "2026-03-30"
+
+
+def test_fee_block_nothing_extracted(monkeypatch):
+    # Vanguard Advisers (CRD 106715) in the 2026-08-28 export.
+    part2a = {
+        "crd_number": "100001", "brochure_name": "STABLE VALUE", "brochure_date": "3/30/2026",
+        "fee_rate_blended": None, "fee_rate_is_estimate": 0, "fee_tiers_json": "[]",
+        "fee_notes": None, "account_minimum": None, "account_minimum_waivable": 0,
+        "needs_review": 1,
+    }
+    _forced_firm(monkeypatch, part2a=part2a)
+    fees = server.get_firm(crd="100001")["fees"]
+    assert fees["basis"] == "not extracted"
+    assert "disclaimer" not in fees
+    assert "account_minimum_waivable" not in fees
+    assert fees["brochure_date"] == "2026-03-30"
+    assert "SEC IAPD" in fees["note"]
+
+
+def test_get_firm_description_names_new_shapes():
+    import asyncio
+    tool = asyncio.run(server.mcp.get_tool("get_firm"))
+    text = " ".join((tool.description or "").split())
+    assert "private_residence_locations_withheld" in text
+    assert "{state, date}" in text

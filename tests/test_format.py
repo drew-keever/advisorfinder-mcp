@@ -341,7 +341,6 @@ def test_envelope_keys_present():
     assert "data_as_of" in result
     assert result["advisorfinder"]["link"] == "https://advisorfinder.com"
     assert "note" in result["advisorfinder"]
-    assert "verify" in result
     assert "coverage_caveats" in result
     assert isinstance(result["coverage_caveats"], list)
 
@@ -350,6 +349,13 @@ def test_envelope_data_as_of_mentions_advisor_and_firm_dates():
     result = fmt.envelope({})
     assert "advisor data as of" in result["data_as_of"]
     assert "firm data as of" in result["data_as_of"]
+
+
+def test_envelope_omits_empty_verify():
+    # No "verify": {} in any response: the key is present only with links.
+    assert "verify" not in fmt.envelope({})
+    assert "verify" not in fmt.envelope({}, verify={})
+    assert "verify" not in fmt.envelope({}, verify=None)
 
 
 def test_envelope_caveats_and_verify_passed_through():
@@ -714,8 +720,17 @@ def test_marketplace_pricing_plain_text_passes_through():
 def test_marketplace_states_av_json_and_csv():
     assert fmt.marketplace_states('[{"S":"TX"},{"S":"OK"}]') == ["TX", "OK"]
     assert fmt.marketplace_states("NY,NJ, CT") == ["NY", "NJ", "CT"]
-    assert fmt.marketplace_states(None) == []
+    # Not filled in on the profile -> None ("not stated"), never [] ("none").
+    assert fmt.marketplace_states(None) is None
+    assert fmt.marketplace_states("") is None
+    assert fmt.marketplace_states("[]") is None
     assert fmt.marketplace_states("[{bad") == ["[{bad"]  # plain text, split as CSV
+
+
+def test_marketplace_states_production_values():
+    # The only two allowedStates values in production (2026-08-28 export).
+    assert fmt.marketplace_states('[{"S":"TX"},{"S":"OK"},{"S":"NM"},{"S":"LA"}]') == ["TX", "OK", "NM", "LA"]
+    assert fmt.marketplace_states('[{"S":"NC"}]') == ["NC"]
 
 
 # Mojibake samples from production (UTF-8 decoded as cp1252 upstream).
@@ -1024,3 +1039,222 @@ def test_has_unreadable_chars():
     assert fmt.has_unreadable_chars(None, "S�O PAULO")
     assert not fmt.has_unreadable_chars(None, "São Paulo", 3)
     assert "�" in fmt.UNREADABLE_CHARS_CAVEAT
+
+
+# ── iso_date: every date a tool returns is YYYY-MM-DD ───────────────────────
+
+@pytest.mark.parametrize("raw, expected", [
+    ("2011-06-15", "2011-06-15"),                       # employment dates
+    ("2024-08-14 20:25:09", "2024-08-14"),              # marketplace memberSince
+    ("2022-12-06 00:00:00", "2022-12-06"),
+    ("3/30/2026", "2026-03-30"),                        # brochure_date
+    ("8/19/2003", "2003-08-19"),                        # industry_start_date, exam dates
+    ("12/11/2015", "2015-12-11"),
+    ("04/14/2009", "2009-04-14"),                       # state registration dates
+    ("Mon May 05 2025 12:59:41 GMT+0000 (Coordinated Universal Time)", "2025-05-05"),
+    ("Tue Dec 31 2024 16:38:19 GMT+0000 (Coordinated Universal Time)", "2024-12-31"),
+    ("  2011-06-15  ", "2011-06-15"),
+])
+def test_iso_date_known_formats(raw, expected):
+    assert fmt.iso_date(raw) == expected
+
+
+@pytest.mark.parametrize("raw", [
+    None, "", "   ", "not-a-real-date", "2/30/2020", "2020-13-01", "13/1/2020",
+    "Mon Foo 05 2025", "2025", 20250505, "05/2025",
+])
+def test_iso_date_empty_or_unparseable_is_none(raw):
+    assert fmt.iso_date(raw) is None
+
+
+def test_parse_flexible_date_accepts_every_iso_date_format():
+    import datetime
+    assert fmt.parse_flexible_date("2024-08-14 20:25:09") == datetime.date(2024, 8, 14)
+    assert fmt.parse_flexible_date(
+        "Mon May 05 2025 12:59:41 GMT+0000 (Coordinated Universal Time)"
+    ) == datetime.date(2025, 5, 5)
+    assert isinstance(fmt.years_since("8/19/2003"), int)
+
+
+# ── fee_block: no fee value extracted ────────────────────────────────────────
+
+_EMPTY_PART2A = {  # Vanguard Advisers (CRD 106715) in the 2026-08-28 export
+    "brochure_name": "STABLE VALUE",
+    "brochure_date": "3/30/2026",
+    "fee_rate_blended": None,
+    "fee_rate_is_estimate": 0,
+    "fee_tiers_json": "[]",
+    "fee_notes": None,
+    "account_minimum": None,
+    "account_minimum_waivable": 0,
+    "needs_review": 1,
+}
+
+
+def test_fee_block_nothing_extracted_says_so():
+    block = fmt.fee_block(_EMPTY_PART2A)
+    assert block["basis"] == "not extracted"
+    assert "disclaimer" not in block
+    assert "account_minimum_waivable" not in block
+    assert "estimated" not in str(block).lower()
+    assert block["brochure_date"] == "2026-03-30"
+    assert "no fee details were extracted" in block["note"].lower()
+    assert "SEC IAPD" in block["note"]
+
+
+def test_fee_block_nothing_extracted_without_brochure_date():
+    block = fmt.fee_block({**_EMPTY_PART2A, "brochure_date": None, "fee_tiers_json": None, "fee_notes": "  "})
+    assert block["basis"] == "not extracted"
+    assert block["brochure_date"] is None
+
+
+def test_fee_block_account_minimum_zero_is_an_extracted_value():
+    block = fmt.fee_block({**_EMPTY_PART2A, "account_minimum": 0})
+    assert block["basis"] != "not extracted"
+    assert block["account_minimum"] == 0
+    assert "account_minimum_waivable" in block
+
+
+def test_fee_block_brochure_date_is_iso():
+    block = fmt.fee_block({**_EMPTY_PART2A, "fee_rate_blended": 0.01, "needs_review": 0})
+    assert block["brochure_date"] == "2026-03-30"
+    assert block["basis"] == "as filed in ADV Part 2A"
+
+
+# ── state registrations: [{state, date}] ────────────────────────────────────
+
+def test_state_registrations_firms_format():
+    # firms.state_registrations in production: "ST-MM/DD/YYYY, ..."
+    assert fmt.state_registrations("AK-04/14/2009, CA-03/13/2025") == [
+        {"state": "AK", "date": "2009-04-14"},
+        {"state": "CA", "date": "2025-03-13"},
+    ]
+
+
+def test_state_registrations_firms_state_format():
+    # firms_state.states_approved in production: "ST:YYYY-MM-DD"
+    assert fmt.state_registrations("VA:2023-01-03") == [{"state": "VA", "date": "2023-01-03"}]
+
+
+def test_state_registrations_without_dates_and_odd_values():
+    assert fmt.state_registrations("NY,FL") == [
+        {"state": "NY", "date": None}, {"state": "FL", "date": None},
+    ]
+    assert fmt.state_registrations("TX-99/99/2020") == [{"state": "TX", "date": None}]
+    assert fmt.state_registrations(None) == []
+    assert fmt.state_registrations("") == []
+
+
+# ── marketplace: virtual meetings flag ──────────────────────────────────────
+
+@pytest.mark.parametrize("raw, expected", [
+    ("1", True), ("Yes", True), ("true", True), (1, True),
+    ("0", False), ("No", False), (0, False),
+    (None, None), ("", None), ("  ", None),
+])
+def test_marketplace_flag(raw, expected):
+    assert fmt.marketplace_flag(raw) is expected
+
+
+# ── marketplace: credential suffixes in display names ───────────────────────
+
+def _creds(*acronyms):
+    return [{"acronym": a, "name": None, "status": "self-reported"} for a in acronyms]
+
+
+@pytest.mark.parametrize("name, creds, expected", [
+    ("David Calliott, CFP®", _creds("CFP®", "Series 7", "Series 66"), "David Calliott"),
+    ("Steven Evensen, CFP ®", _creds("CFP®"), "Steven Evensen"),
+    ("Justin Porter, CPA, CFP(r)", _creds("CFP®", "CPA"), "Justin Porter"),
+    ("Jay Williams, CFP®,\xa0CIMA®", _creds("AIF®", "CIMA®", "CFP®"), "Jay Williams"),
+    ("Erik Baskin, CFP®, MBA", _creds("MBA", "Series 65", "CFP®"), "Erik Baskin"),
+    ("Stephen Santangelo, CFA, CAIA", _creds("CAIA®", "CFA®"), "Stephen Santangelo"),
+    # Only the trailing run that matches the member's own credentials goes.
+    ("D. Vance Barse, CPWA®, AIF®", _creds("AIF®"), "D. Vance Barse, CPWA®"),
+    ("Fred Tan, CFP, MBA", _creds("CFP®", "Series 65"), "Fred Tan, CFP, MBA"),
+    # No credentials on the profile: nothing is stripped.
+    ("Dan Bennett, CFP", None, "Dan Bennett, CFP"),
+    ("Dan Bennett, CFP", [], "Dan Bennett, CFP"),
+    # No comma: never cut.
+    ("EP Wealth Advisors", _creds("EP"), "EP Wealth Advisors"),
+    ("Cfp Smith", _creds("CFP®"), "Cfp Smith"),
+    # The name itself is never removed, even when it equals an acronym.
+    ("CFA, CFP", _creds("CFA®", "CFP®"), "CFA"),
+    # Plain-text credentials (the fixture shape).
+    ("John Q. Smith, CFA", "CFP, CFA", "John Q. Smith"),
+    (None, _creds("CFP®"), None),
+])
+def test_marketplace_display_name(name, creds, expected):
+    assert fmt.marketplace_display_name(name, creds) == expected
+
+
+# ── marketplace: credentials vs designations ────────────────────────────────
+
+def test_credential_sources_differ():
+    designations = [{"code": "CFP", "name": "Certified Financial Planner"}]
+    # No designations on file is missing data, not a difference.
+    assert fmt.credential_sources_differ([], _creds("CFP®", "Series 7")) is False
+    assert fmt.credential_sources_differ(designations, _creds("CFP®", "CFA®")) is True
+    assert fmt.credential_sources_differ(designations, "CFP, CFA") is True
+    # Same designations: exam licenses (Series N) are not compared -- SEC
+    # records list them as exams, never as designations.
+    assert fmt.credential_sources_differ(designations, _creds("CFP®", "Series 65")) is False
+    assert fmt.credential_sources_differ(designations, "CFP") is False
+    # Nothing on the profile: nothing to compare.
+    assert fmt.credential_sources_differ(designations, None) is False
+    assert fmt.credential_sources_differ([], []) is False
+
+
+def _degree(acronym, name):
+    return {"acronym": acronym, "name": name, "status": "self-reported"}
+
+
+def test_credential_comparison_leaves_out_academic_degrees():
+    designations = [{"code": "CFP", "name": "Certified Financial Planner"}]
+    profile = [
+        _degree("CFP®", "Certified Financial Planner™"),
+        _degree("MBA", "Master of Business Administration"),
+        _degree("JD", "Juris Doctor"),
+        _degree("MSFP", "Master of Science in Financial Planning"),
+        _degree("MS in Business Administration", "Master of Science in Business Administration"),
+        _degree("Ph.D.", None),
+        _degree("Series 65", "Series 65 - Uniform Investment Adviser Law Exam"),
+    ]
+    assert fmt.credential_sources_differ(designations, profile) is False
+    assert fmt.credential_sources_differ(designations, "CFP, MBA, MS, BA, BS, BBA, PhD, J.D.") is False
+    # BFA (Behavioral Financial Advisor) is a designation, not a degree.
+    assert fmt.credential_sources_differ(designations, "CFP, BFA") is True
+    # "Master Registered Financial Consultant" (MRFC) is a designation, not a degree.
+    assert fmt.credential_sources_differ(
+        designations, [*profile, _degree("MRFC®", "Master Registered Financial Consultant®")]
+    ) is True
+
+
+def test_designations_coverage_gap():
+    designations = [{"code": "CFP", "name": "Certified Financial Planner"}]
+    assert fmt.designations_coverage_gap([], _creds("CFP®", "Series 7")) is True
+    assert fmt.designations_coverage_gap([], "CFP") is True
+    assert fmt.designations_coverage_gap(designations, _creds("CFA®")) is False
+    # Only exam licenses or degrees on the profile: no designation to explain.
+    assert fmt.designations_coverage_gap([], _creds("Series 65")) is False
+    assert fmt.designations_coverage_gap([], [_degree("MBA", "Master of Business Administration")]) is False
+    assert fmt.designations_coverage_gap([], None) is False
+
+
+def test_degree_suffix_that_is_an_own_credential_is_still_stripped_from_name():
+    creds = [_degree("CFP®", "Certified Financial Planner™"), _degree("MBA", "Master of Business Administration")]
+    assert fmt.marketplace_display_name("Erik Baskin, CFP®, MBA", creds) == "Erik Baskin"
+
+
+def test_designation_source_labels():
+    assert fmt.designation_source_label("part2b") == "Form ADV Part 2B brochure supplement"
+    assert fmt.designation_source_label("website_title") == "firm website"
+    assert fmt.designation_source_label("something_else") == "something_else"
+    assert fmt.designation_source_label(None) is None
+
+
+def test_official_search_home_urls():
+    assert fmt.official_search_home_urls() == {
+        "iapd": "https://adviserinfo.sec.gov/",
+        "brokercheck": "https://brokercheck.finra.org/",
+    }
