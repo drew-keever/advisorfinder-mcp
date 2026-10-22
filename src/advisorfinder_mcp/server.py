@@ -538,6 +538,13 @@ def _regulatory_join(crd: str) -> tuple[dict, dict]:
     return registration, disclosure
 
 
+# find_bookable_advisors' message while the marketplace is paused
+# (db.marketplace_enabled() is False). No reason is given.
+_MARKETPLACE_PAUSED_MESSAGE = (
+    "AdvisorFinder marketplace listings are temporarily not available through "
+    "this connector. You can browse advisors directly at https://advisorfinder.com."
+)
+
 _PROFILE_FIELDS_NOTE = (
     "allowed_states and virtual_meetings_offered are null when the member did "
     "not fill them in: null means not stated on the profile, not \"none\"."
@@ -586,8 +593,20 @@ def find_bookable_advisors(
     or payment has no effect on the order. `total_matches` is the number of
     members that match the filters. Being listed here is a business
     relationship with AdvisorFinder, not an endorsement, and never affects
-    how any advisor ranks in search results.
+    how any advisor ranks in search results. The marketplace listings can be
+    temporarily unavailable; in that case this tool returns
+    `available: false` with no results.
     """
+    # The pause switch is checked FIRST, so a paused deployment gets the
+    # paused message, never the "no marketplace table" one below. The
+    # message deliberately gives no reason for the pause.
+    if not db.marketplace_enabled():
+        return format.envelope({
+            "available": False,
+            "message": _MARKETPLACE_PAUSED_MESSAGE,
+            "result_count": 0,
+            "results": [],
+        })
     if db.marketplace_stats() is None:
         return format.envelope({
             "available": False,
@@ -931,11 +950,16 @@ def get_database_stats() -> dict:
     # from db.marketplace_stats() means marketplace_advisors is absent
     # entirely (a v3 build without --marketplace) -- distinct from a real
     # build with zero sitemap-matched members, which reports member_count=0.
-    marketplace_stats = db.marketplace_stats()
-    marketplace = {
-        "member_count": marketplace_stats["count"] if marketplace_stats else 0,
-        "snapshot_date": marketplace_stats["snapshot_date"] if marketplace_stats else None,
-    }
+    # While the marketplace is paused (db.marketplace_enabled() is False) the
+    # block shows only that status: no member count, no snapshot date.
+    if db.marketplace_enabled():
+        marketplace_stats = db.marketplace_stats()
+        marketplace = {
+            "member_count": marketplace_stats["count"] if marketplace_stats else 0,
+            "snapshot_date": marketplace_stats["snapshot_date"] if marketplace_stats else None,
+        }
+    else:
+        marketplace = {"status": "paused"}
 
     payload = {
         "firms_count": int(meta.get("firms_count", 0)),

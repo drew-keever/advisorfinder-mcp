@@ -105,15 +105,7 @@ def coverage_and_limitations() -> str:
 
 ## AdvisorFinder marketplace
 
-Some advisors are listed on AdvisorFinder's marketplace. Their listings add
-self-provided profile information and a link to contact them. Being listed
-is a business relationship with AdvisorFinder — it is labeled on every
-result, never affects search ranking, and is not an endorsement. Regulatory
-data is shown identically for all advisors. Some marketplace members are
-state-registered or broker-dealer-side advisors whose records may not appear
-in our SEC-roster data — those results are clearly labeled, with FINRA
-BrokerCheck / SEC IAPD verify links included.
-
+{_marketplace_section()}
 ## Data vintage
 
 - Advisor (IAR) data: {meta.get('ia_reps_as_of')}
@@ -127,6 +119,31 @@ an advisor doesn't exist. State-registered firms and non-Active
 registrations are the most common reasons a real advisor or firm won't
 show up here — always confirm via SEC IAPD / FINRA BrokerCheck directly.
 """
+
+
+# The marketplace paragraph is mirrored (README.md, docs/mcp-help.md): edit
+# all three together. It is shown only while marketplace data is served
+# (db.marketplace_enabled()); while paused, this resource says so instead and
+# gives no reason.
+_MARKETPLACE_SECTION = """Some advisors are listed on AdvisorFinder's marketplace. Their listings add
+self-provided profile information and a link to contact them. Being listed
+is a business relationship with AdvisorFinder — it is labeled on every
+result, never affects search ranking, and is not an endorsement. Regulatory
+data is shown identically for all advisors. Some marketplace members are
+state-registered or broker-dealer-side advisors whose records may not appear
+in our SEC-roster data — those results are clearly labeled, with FINRA
+BrokerCheck / SEC IAPD verify links included.
+"""
+
+_MARKETPLACE_PAUSED_SECTION = """AdvisorFinder marketplace listings are temporarily not available through
+this connector. You can browse advisors directly at https://advisorfinder.com.
+"""
+
+
+def _marketplace_section() -> str:
+    if db.marketplace_enabled():
+        return _MARKETPLACE_SECTION
+    return _MARKETPLACE_PAUSED_SECTION
 
 
 def register(mcp) -> None:

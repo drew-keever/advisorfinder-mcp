@@ -27,3 +27,13 @@ def _fixture_db_ready():
         "— regenerate tests/fixtures/mcp_public.db (see tests/fixtures/README.md)"
     )
     yield
+
+
+@pytest.fixture(autouse=True)
+def _marketplace_enabled_for_tests(monkeypatch):
+    """Marketplace serving is PAUSED by default in production (the
+    MCP_MARKETPLACE_ENABLED switch, see db.marketplace_enabled). Most of this
+    suite tests the marketplace behavior itself, so it runs with the switch
+    ON. Tests of the paused default remove the variable with their own
+    monkeypatch.delenv (same monkeypatch instance, so it wins)."""
+    monkeypatch.setenv("MCP_MARKETPLACE_ENABLED", "true")

@@ -5,6 +5,7 @@ plumbing. server.py holds tool orchestration and consumer-facing wording;
 this module holds SQL (plus the one Python-side filter in search_marketplace,
 which matches against format.marketplace_search_text -- see its docstring).
 """
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -596,6 +597,22 @@ def roster_counts(conn: sqlite3.Connection, crds: list[str]) -> dict[str, int]:
 # ── marketplace (optional; present only when the export was built with
 #    --marketplace) ────────────────────────────────────────────────────────────
 
+MARKETPLACE_ENABLED_ENV = "MCP_MARKETPLACE_ENABLED"
+
+
+def marketplace_enabled() -> bool:
+    """The marketplace pause switch -- the ONE place it is read. Marketplace
+    data is served only when MCP_MARKETPLACE_ENABLED is exactly "true"
+    (case-insensitive, whitespace-trimmed); absent or any other value means
+    paused, so the pause is the default with no deploy configuration. Read on
+    every call (never cached at import), so flipping the variable and
+    restarting is the whole switch. When paused, the three public readers
+    below return their "no marketplace table" values without opening the DB,
+    so no marketplace row is ever read and every tool degrades exactly as on
+    an export built without --marketplace."""
+    return os.environ.get(MARKETPLACE_ENABLED_ENV, "").strip().lower() == "true"
+
+
 def _marketplace_table_exists(conn: sqlite3.Connection) -> bool:
     """marketplace_advisors is OPTIONAL-at-runtime (build_mcp_public_db.py only
     creates it when invoked with --marketplace) — checked via sqlite_master
@@ -613,7 +630,10 @@ def get_marketplace_by_crd(crd: str) -> sqlite3.Row | None:
     regulatory data) for `crd`, or None if either the table is absent (no
     --marketplace at build time) or no marketplace member has this crd (never
     joined the marketplace, or filtered out by the sitemap-scoping gate in
-    sanitize_marketplace.sanitize())."""
+    sanitize_marketplace.sanitize()). Also None when the marketplace is paused
+    (marketplace_enabled())."""
+    if not marketplace_enabled():
+        return None
     with get_conn() as conn:
         if not _marketplace_table_exists(conn):
             return None
@@ -653,7 +673,10 @@ def search_marketplace_with_total(
     that says nothing about them, and on JSON keys. 294 rows in production,
     so loading the city/state-filtered rows and filtering here is cheap. The
     limit is applied AFTER the specialty filter. ([], 0) (not an error)
-    when the table is absent."""
+    when the table is absent or the marketplace is paused
+    (marketplace_enabled())."""
+    if not marketplace_enabled():
+        return [], 0
     with get_conn() as conn:
         if not _marketplace_table_exists(conn):
             return [], 0
@@ -691,7 +714,11 @@ def marketplace_stats() -> dict | None:
     not the count, is authoritative for 'was this a marketplace build at
     all' — a build run WITH --marketplace against zero sitemap-matched
     advisors would still have the table, just empty, and should report
-    count=0 rather than None)."""
+    count=0 rather than None). Also None when the marketplace is paused
+    (marketplace_enabled()) -- callers that must tell "paused" from "absent"
+    check marketplace_enabled() themselves."""
+    if not marketplace_enabled():
+        return None
     with get_conn() as conn:
         exists = _marketplace_table_exists(conn)
     if not exists:
