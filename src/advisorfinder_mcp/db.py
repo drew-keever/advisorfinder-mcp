@@ -136,14 +136,12 @@ def disclosure_tally() -> dict:
 
 # ── advisor search ────────────────────────────────────────────────────────────
 
-def _advisor_where(name=None, firm=None, city=None, state=None) -> tuple[list[str], list]:
-    """(WHERE clauses over ia_reps, bound params) for the name/firm/city/state
-    filters. Shared by search_advisors and count_advisors, so the total and
-    the returned page always use the same filters. See search_advisors for
-    the filter semantics."""
-    where = ["1=1"]
-    params: list = []
-
+def _advisor_filters(name=None, firm=None, city=None, state=None) -> tuple[list[str], list, str | None]:
+    """(conditions over ia_rep_firms columns, their bound params, the name
+    FTS query or None) for the name/firm/city/state filters. A filter that
+    sanitizes to nothing adds no condition. Shared by _advisor_where and
+    count_advisors, so the total and the returned page always use the same
+    filters. See search_advisors for the filter semantics."""
     firm_city_state_conditions = []
     firm_city_state_params: list = []
     if firm:
@@ -159,32 +157,70 @@ def _advisor_where(name=None, firm=None, city=None, state=None) -> tuple[list[st
     if state:
         firm_city_state_conditions.append("branch_state = ? COLLATE NOCASE")
         firm_city_state_params.append(state)
+    name_q = fts_query(name) if name else None  # empty-after-sanitize -> absent
+    return firm_city_state_conditions, firm_city_state_params, name_q or None
 
-    if firm_city_state_conditions:
-        sub_where = " AND ".join(firm_city_state_conditions)
+
+_NAME_MATCH = "IN (SELECT ind_source_id FROM advisor_fts WHERE advisor_fts MATCH ?)"
+
+
+def _advisor_where(name=None, firm=None, city=None, state=None) -> tuple[list[str], list]:
+    """(WHERE clauses over ia_reps, bound params) for the name/firm/city/state
+    filters (_advisor_filters)."""
+    where = ["1=1"]
+    params: list = []
+    conditions, condition_params, name_q = _advisor_filters(
+        name=name, firm=firm, city=city, state=state
+    )
+    if conditions:
+        sub_where = " AND ".join(conditions)
         where.append(f"ind_source_id IN (SELECT ind_source_id FROM ia_rep_firms WHERE {sub_where})")
-        params.extend(firm_city_state_params)
-
-    if name:
-        q = fts_query(name)
-        if q:  # empty-after-sanitize -> treat as absent: no clause added
-            where.append(
-                "ind_source_id IN (SELECT ind_source_id FROM advisor_fts WHERE advisor_fts MATCH ?)"
-            )
-            params.append(q)
+        params.extend(condition_params)
+    if name_q:
+        where.append("ind_source_id " + _NAME_MATCH)
+        params.append(name_q)
     return where, params
 
 
+# Match counts (search_advisors' total_matches, search_firms' total) stop
+# at this number. A broad search ("llc": 268,283 advisors) does not need an
+# exact total. Read at call time, so tests can lower it.
+COUNT_CAP = 10_000
+
+
 def count_advisors(name=None, firm=None, city=None, state=None) -> int:
-    """Number of advisors search_advisors() would match with no limit: one
-    COUNT(*) over the same WHERE (_advisor_where), never a fetch of every
-    row. Production (2026-08-28 export, warm): state=CA 42,214 rows in
-    ~40 ms; firm="llc" 268,283 rows in ~0.3 s."""
-    where, params = _advisor_where(name=name, firm=firm, city=city, state=state)
+    """Number of advisors search_advisors() would match with no limit, but
+    at most COUNT_CAP + 1 (a result above COUNT_CAP means "more than
+    COUNT_CAP matched"). Same filters as the search (_advisor_filters);
+    never a fetch of every row.
+
+    With a firm/city/state filter, the count walks the matching
+    ia_rep_firms rows (DISTINCT advisors that are in ia_reps) and stops at
+    COUNT_CAP + 1. The ia_reps-side form (_advisor_where) first builds the
+    full list of matching advisor ids, so a LIMIT on it saved little.
+    Production (2026-08-28 export, warm): firm="llc" (268,283 matches)
+    ~0.31 s uncapped, ~0.26 s capped with the ia_reps-side form, ~35 ms
+    with this one; state="CA" 45 ms -> 9 ms. A name-only count keeps the
+    ia_reps-side form (name="smith": ~5 ms)."""
+    conditions, condition_params, name_q = _advisor_filters(
+        name=name, firm=firm, city=city, state=state
+    )
+    if conditions:
+        conditions = list(conditions)
+        params = list(condition_params)
+        if name_q:
+            conditions.append("f.ind_source_id " + _NAME_MATCH)
+            params.append(name_q)
+        sql = (
+            "SELECT COUNT(*) FROM (SELECT DISTINCT f.ind_source_id FROM ia_rep_firms f "
+            "JOIN ia_reps r ON r.ind_source_id = f.ind_source_id WHERE "
+            + " AND ".join(conditions) + " LIMIT ?)"
+        )
+    else:
+        where, params = _advisor_where(name=name, firm=firm, city=city, state=state)
+        sql = "SELECT COUNT(*) FROM (SELECT 1 FROM ia_reps WHERE " + " AND ".join(where) + " LIMIT ?)"
     with get_conn() as conn:
-        return conn.execute(
-            "SELECT COUNT(*) FROM ia_reps WHERE " + " AND ".join(where), params
-        ).fetchone()[0]
+        return conn.execute(sql, [*params, COUNT_CAP + 1]).fetchone()[0]
 
 
 def search_advisors(name=None, firm=None, city=None, state=None, limit=20) -> list[dict]:

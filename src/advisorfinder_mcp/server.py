@@ -30,13 +30,16 @@ from mcp.types import ToolAnnotations  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 from starlette.responses import JSONResponse  # noqa: E402
 
-from . import bootstrap, db, format, resources  # noqa: E402
+from . import bootstrap, db, format, guard, resources  # noqa: E402
 
 # Named explicitly: under `python -m`, __name__ is "__main__".
 log = logging.getLogger("advisorfinder_mcp.server")
 
 mcp = FastMCP("advisorfinder")
 resources.register(mcp)
+# Per-client-IP rate limits and one usage log line per tool call
+# (tools/call only; see guard.py for the limits and their env overrides).
+mcp.add_middleware(guard.from_env())
 
 
 def _read_only(title: str) -> ToolAnnotations:
@@ -152,6 +155,15 @@ def _json_list(raw) -> list:
     return data if isinstance(data, list) else []
 
 
+def _total_matches(total: int) -> dict:
+    """{"total_matches": n} for a match count, capped at db.COUNT_CAP: a
+    larger count gives total_matches = db.COUNT_CAP plus
+    "total_matches_capped": True (the key is absent otherwise)."""
+    if total > db.COUNT_CAP:
+        return {"total_matches": db.COUNT_CAP, "total_matches_capped": True}
+    return {"total_matches": total}
+
+
 @mcp.tool(title="Search advisors", annotations=_read_only("Search advisors"))
 def search_advisors(
     name: str | None = None,
@@ -172,7 +184,8 @@ def search_advisors(
     IAPD / FINRA BrokerCheck registration feeds, not real-time. Exact name
     matches rank first. `total_matches` is the number of advisors that match
     the filters; `more_results_available` appears when more advisors match
-    than the limit returns.
+    than the limit returns. Counting stops at 10,000: `total_matches_capped:
+    true` means more than 10,000 advisors matched.
     """
     if not any([name, firm, city, state]):
         return format.envelope({
@@ -192,8 +205,9 @@ def search_advisors(
     rows = db.search_advisors(name=name, firm=firm, city=city, state=state, limit=clamped_limit + 1)
     more_results = len(rows) > clamped_limit
     rows = rows[:clamped_limit]
-    # One COUNT(*) over the same WHERE as the search (db._advisor_where);
-    # skipped when the page already holds every match.
+    # One COUNT(*) over the same WHERE as the search (db._advisor_where),
+    # stopped at db.COUNT_CAP + 1; skipped when the page already holds every
+    # match.
     total = (
         db.count_advisors(name=name, firm=firm, city=city, state=state)
         if more_results else len(rows)
@@ -230,7 +244,7 @@ def search_advisors(
             entry["advisorfinder_listing"] = listing
         results.append(entry)
 
-    payload = {"result_count": len(results), "total_matches": total, "results": results}
+    payload = {"result_count": len(results), **_total_matches(total), "results": results}
     if more_results:
         payload["more_results_available"] = True
         payload["more_results_hint"] = (
@@ -712,7 +726,8 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
     only firm ranks as an undisclosed band with no advisors). A result can
     carry `advisor_count_note` (no advisor records on file) or `unreadable_characters_note` (characters
     lost in the source data, shown as \ufffd). `total_matches` is the number
-    of firms that match the filters.
+    of firms that match the filters. Counting stops at 10,000:
+    `total_matches_capped: true` means more than 10,000 firms matched.
     """
     unsanitizable = _unsanitizable_supplied_filter(name=name)
     if unsanitizable:
@@ -746,7 +761,7 @@ def search_firms(name: str | None = None, state: str | None = None, limit: int =
             )
         results.append(entry)
 
-    payload = {"result_count": len(results), "total_matches": total, "results": results}
+    payload = {"result_count": len(results), **_total_matches(total), "results": results}
     if not results:
         payload["not_found_guidance"] = "No firms matched your search."
 

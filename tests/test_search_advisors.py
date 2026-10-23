@@ -401,6 +401,9 @@ def test_total_matches_uses_the_same_filters_as_the_search():
     for kwargs in (
         {"state": "NY"}, {"city": "new york"}, {"firm": "alpha"},
         {"name": "smith", "state": "NY"}, {"name": "john smith"},
+        {"name": "smith", "firm": "alpha"}, {"firm": "alpha", "state": "NY"},
+        {"city": "new york", "state": "NY", "firm": "alpha", "name": "smith"},
+        {"firm": "zzznomatch"},
     ):
         everything = db.search_advisors(limit=10_000, **kwargs)
         assert db.count_advisors(**kwargs) == len(everything), kwargs
@@ -418,3 +421,34 @@ def test_no_name_miss_gets_official_search_home_links():
         "iapd": "https://adviserinfo.sec.gov/",
         "brokercheck": "https://brokercheck.finra.org/",
     }
+
+
+# ── total_matches stops counting at db.COUNT_CAP ────────────────────────────
+
+def test_count_advisors_stops_at_the_cap(monkeypatch):
+    from advisorfinder_mcp import db
+    monkeypatch.setattr(db, "COUNT_CAP", 2)
+    # 4 smiths in the fixture: the count stops at COUNT_CAP + 1.
+    assert db.count_advisors(name="smith") == 3
+
+
+def test_total_matches_capped_when_more_than_the_cap_match(monkeypatch):
+    from advisorfinder_mcp import db
+    monkeypatch.setattr(db, "COUNT_CAP", 2)
+    result = server.search_advisors(name="smith", limit=1)
+    assert result["result_count"] == 1
+    assert result["total_matches"] == 2
+    assert result["total_matches_capped"] is True
+    assert result["more_results_available"] is True
+
+
+def test_total_matches_not_capped_at_exactly_the_cap(monkeypatch):
+    from advisorfinder_mcp import db
+    monkeypatch.setattr(db, "COUNT_CAP", 4)
+    result = server.search_advisors(name="smith", limit=1)
+    assert result["total_matches"] == 4
+    assert "total_matches_capped" not in result
+
+
+def test_total_matches_capped_absent_by_default():
+    assert "total_matches_capped" not in server.search_advisors(name="smith", limit=2)

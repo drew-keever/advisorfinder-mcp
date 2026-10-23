@@ -545,3 +545,19 @@ def test_search_firms_no_name_miss_gets_official_search_home_links():
         "iapd": "https://adviserinfo.sec.gov/",
         "brokercheck": "https://brokercheck.finra.org/",
     }
+
+
+# ── total_matches stops at db.COUNT_CAP ─────────────────────────────────────
+
+def test_search_firms_total_matches_capped(monkeypatch):
+    from advisorfinder_mcp import db
+    full = server.search_firms(state="NY", limit=50)["total_matches"]
+    assert full >= 2
+    monkeypatch.setattr(db, "COUNT_CAP", full - 1)
+    capped = server.search_firms(state="NY", limit=1)
+    assert capped["total_matches"] == full - 1
+    assert capped["total_matches_capped"] is True
+    monkeypatch.setattr(db, "COUNT_CAP", full)
+    exact = server.search_firms(state="NY", limit=1)
+    assert exact["total_matches"] == full
+    assert "total_matches_capped" not in exact
