@@ -50,6 +50,8 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware
 
+from .format import FAIR_USE_URL
+
 log = logging.getLogger("advisorfinder_mcp.guard")
 usage_log = logging.getLogger("advisorfinder_mcp.usage")
 
@@ -314,7 +316,7 @@ class RateLimiter:
 def _wait_text(seconds: float) -> str:
     s = max(1, math.ceil(seconds))
     if s < 120:
-        return f"{s} seconds"
+        return f"{s} second" if s == 1 else f"{s} seconds"
     if s < 2 * _HOUR:
         return f"about {math.ceil(s / 60)} minutes"
     return f"about {math.ceil(s / _HOUR)} hours"
@@ -325,7 +327,8 @@ def rate_limit_message(retry_after: float) -> str:
     return (
         "The rate limit for this AdvisorFinder connector was reached. "
         f"Please retry in {_wait_text(retry_after)}. This connector is for "
-        "interactive research, not bulk data extraction."
+        "interactive research, not bulk data extraction. See "
+        f"{FAIR_USE_URL}."
     )
 
 

@@ -1155,6 +1155,17 @@ def years_since(raw: str | None) -> int | None:
 
 # ── envelope ──────────────────────────────────────────────────────────────────
 
+# Fair-use notice carried by every tool response, the server instructions
+# and the rate-limit message, so every caller (including a script) receives
+# it with each call. Deliberately not called "terms" until counsel approves
+# connector terms; then this text and the link change together.
+FAIR_USE_URL = "https://advisorfinder.com/mcp"
+FAIR_USE_NOTICE = (
+    "This connector is for interactive research. Automated bulk extraction "
+    f"is not permitted. See {FAIR_USE_URL}."
+)
+
+
 def envelope(
     payload: dict,
     *,
@@ -1191,6 +1202,7 @@ def envelope(
         "advisorfinder": {
             "link": advisorfinder_profile_url(marketplace_row),
             "note": "Compare financial advisors on AdvisorFinder.",
+            "fair_use": FAIR_USE_NOTICE,
         },
     }
     # `verify` only when there are links: never an empty {}.

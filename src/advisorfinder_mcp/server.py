@@ -35,7 +35,7 @@ from . import bootstrap, db, format, guard, resources  # noqa: E402
 # Named explicitly: under `python -m`, __name__ is "__main__".
 log = logging.getLogger("advisorfinder_mcp.server")
 
-mcp = FastMCP("advisorfinder")
+mcp = FastMCP("advisorfinder", instructions=format.FAIR_USE_NOTICE)
 resources.register(mcp)
 # Per-client-IP rate limits and one usage log line per tool call
 # (tools/call only; see guard.py for the limits and their env overrides).
